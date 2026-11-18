@@ -1,0 +1,17 @@
+## Title: |cF2C14ESKTools|r |c8FB3FF- ESO|r
+## Author: Scotskoogen-Chris
+## Version: 0.7.0
+## AddOnVersion: 700
+## APIVersion: 101050 101051
+## Description: SKTools for Elder Scrolls Online by Scotskoogen-Chris. Type /sktools to open the settings window.
+## SavedVariables: SKToolsESO_SV
+
+Core.lua
+UI.lua
+Draw.lua
+Grid.lua
+modules/General.lua
+modules/Resources.lua
+modules/Skills.lua
+modules/About.lua
+Init.lua
