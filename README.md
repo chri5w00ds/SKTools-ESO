@@ -11,6 +11,7 @@ SKTools for **The Elder Scrolls Online**: the look and feel of
 | Buffs | The effects on you: Major and Minor buffs growing left, Major and Minor debuffs growing right, and every other effect in Other buffs and Other debuffs panels |
 | Instance | Its own element: the effects an instance and its enemies put on you in dungeons, trials and arenas |
 | Group | Which group member has which of the effects you watch, in a grid |
+| Synergy | For tanks: which group member can take which synergy, with each one's 20-second cooldown |
 | CC alert | A resizable banner naming the CC on you and whether to Break Free or Roll Dodge, with a sound |
 | Minimap | A round map of where you are, following you, with your location above it and your own time in it |
 | Keybinds | One account-wide set of keybinds: save it from one character, switch it on for the others |
@@ -97,6 +98,15 @@ skill bars' global cooldown, leaving black, with the time left; one who hasn't g
 are a list you edit and reorder in the Group tab (starting with Major Courage, Major and Minor Berserk, Major
 Slayer, Powerful Assault, Major Force, Minor Toughness and Major Resolve); an effect's icon is
 learnt the first time anyone in the group has it.
+
+### Synergy
+
+For tanks, in the group buffs' style: one row per group member, one column per synergy family
+(every morph of a skill shares one cooldown, and so do Spear Shards and Necrotic Orb). Green
+means ready; just taken, the cell darkens with the skill bars' cooldown sweep and the seconds left
+of its 20-second cooldown. Shown while you're queued as a tank (or always). The families are a
+list you edit and reorder in the Synergy tab: a name, then the synergies in it, separated by
+commas.
 
 ### CC alert
 

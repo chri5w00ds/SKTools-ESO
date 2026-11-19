@@ -61,6 +61,9 @@ local function RoleIcon(tag)
     return ok and icon or nil
 end
 
+Gp.RoleRank = function(tag) return RoleRank(tag) end
+Gp.RoleIcon = function(tag) return RoleIcon(tag) end
+
 function Gp:Members()
     local tags = {}
     local n = GetGroupSize()

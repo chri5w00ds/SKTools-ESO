@@ -16,7 +16,13 @@ local G = {}
 SKT.Grid = G
 
 function G.On()   return SKT.db ~= nil and SKT.db.snap ~= false end
-function G.Size() return math.max(2, (SKT.db and SKT.db.grid) or 8) end
+-- a grid box, in whole screen pixels: with any UI scale, every grid line, element edge and size then
+-- lands on an exact pixel, so nothing drifts off the lines across a wide element
+function G.Size()
+    local px = D.Px()
+    local g = math.max(2, (SKT.db and SKT.db.grid) or 8)
+    return math.max(2 * px, zo_round(g / px) * px)
+end
 
 -- an offset from the middle of the screen, put on the nearest grid line
 function G.SnapOne(v)
@@ -39,7 +45,10 @@ function G.Trim() return G.On() and D.Px() or 0 end
 
 -- slider text: the size actually used
 function G.Fmt(v)
-    if G.On() then return G.Boxes(v, true) .. " px (" .. zo_round(G.Boxes(v, true) / G.Size()) .. " boxes)" end
+    if G.On() then
+        local n = zo_round(G.Boxes(v, true) / G.Size())
+        return zo_round(G.Boxes(v, true)) .. " px (" .. n .. " boxes)"
+    end
     return v .. " px"
 end
 
@@ -128,28 +137,17 @@ function G.Rect(ctrl)
     return ctrl:GetLeft() - cx, ctrl:GetTop() - cy, ctrl:GetRight() - cx, ctrl:GetBottom() - cy
 end
 
--- An element's label while unlocked: a thin gold outline round it and its name in gold above.
+-- An element's label while unlocked: its name in gold just above it.
 -- Returns an object with :SetHidden(hidden).
 function G.Tag(ctrl, text)
-    local box = WM:CreateControl(nil, ctrl, CT_BACKDROP)
-    box:SetCenterColor(0.95, 0.76, 0.31, 0.08)
-    box:SetEdgeColor(0.95, 0.76, 0.31, 0.9)
-    box:SetEdgeTexture("", 1, 1, 1, 0)
-    box:SetAnchor(TOPLEFT, ctrl, TOPLEFT, -4, -4)
-    box:SetAnchor(BOTTOMRIGHT, ctrl, BOTTOMRIGHT, 4, 4)
-    box:SetDrawLevel(20)
-    box:SetHidden(true)
     local label = WM:CreateControl(nil, ctrl, CT_LABEL)
     label:SetFont("$(BOLD_FONT)|14|soft-shadow-thick")
     label:SetColor(0.95, 0.76, 0.31, 1)
     label:SetText(text)
-    label:SetAnchor(BOTTOMLEFT, ctrl, TOPLEFT, -4, -6)
+    label:SetAnchor(BOTTOMLEFT, ctrl, TOPLEFT, 0, -4)
     label:SetDrawLevel(20)
     label:SetHidden(true)
-    local tag = { box = box, label = label }
-    function tag:SetHidden(hidden)
-        self.box:SetHidden(hidden)
-        self.label:SetHidden(hidden)
-    end
+    local tag = { label = label }
+    function tag:SetHidden(hidden) self.label:SetHidden(hidden) end
     return tag
 end

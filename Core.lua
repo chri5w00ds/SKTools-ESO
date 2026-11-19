@@ -5,7 +5,7 @@ SKT = SKT or {}
 local SKT = SKT
 
 SKT.name    = "SKTools-ESO"
-SKT.version = "0.26.3"
+SKT.version = "0.28.4"
 SKT.author  = "Scotskoogen-Chris"
 SKT.svName  = "SKToolsESO_SV"
 SKT.svVer   = 1
@@ -91,7 +91,7 @@ end
 -- elements that can be unlocked and moved (each has db.locked, db.enabled and :ApplyLock())
 function SKT:Movables()
     local list = {}
-    for _, m in ipairs({ self.Resources, self.Skills, self.CC, self.Minimap, self.Buffs, self.Instance, self.Group }) do
+    for _, m in ipairs({ self.Resources, self.Skills, self.CC, self.Minimap, self.Buffs, self.Instance, self.Group, self.Synergy, self.Shared }) do
         if m and m.db then list[#list + 1] = m end
     end
     return list

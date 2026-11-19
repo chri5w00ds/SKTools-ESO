@@ -495,11 +495,13 @@ function S:UpdateIdle()
     self.body:SetAlpha(show and 1 or 0)
 end
 
--- the gap between the bars; with the ultimate meter in it, at least a grid box
+-- the gap between the bars; with the ultimate meter in it, at least two grid boxes
+local function Box() local G = SKT.Grid; return G.On() and G.Size() or 8 end
+
 function S:Gap()
     local G = SKT.Grid
     local g = G.Boxes(self.db.gap, true)
-    if self.db.ultMeter then g = math.max(g, G.On() and G.Size() or 8) end
+    if self.db.ultMeter then g = math.max(g, 2 * Box()) end
     return D.OnPx(g)
 end
 
@@ -512,7 +514,7 @@ function S:LayoutUltMeter(x, gap, h)
         self.meter = m
     end
     local px = D.Px()
-    local on = self.db.ultMeter and gap >= 4 * px
+    local on = self.db.ultMeter and gap >= 2 * px
     m.on = on
     m.track:SetHidden(not on)
     m.fill:SetHidden(not on)
@@ -521,8 +523,15 @@ function S:LayoutUltMeter(x, gap, h)
         for _, t in ipairs(m.ring.dots) do t:SetHidden(true) end
         return
     end
-    -- a pixel of air either side, so its frame doesn't touch the bars' frames
-    local mx, mw = x + 2 * px, math.max(px, gap - 4 * px)
+    -- two grid boxes wide, centred exactly in the space between the two bars' frames, with the
+    -- same number of screen pixels of air on each side (worked out in whole pixels)
+    local trim = SKT.Grid.Trim()
+    local left = x - trim                                   -- just past the left bar's frame
+    local space = zo_round((gap + trim) / px)               -- pixels up to the right bar's frame
+    local w = math.min(space, zo_round(2 * Box() / px) - zo_round(trim / px))
+    if (space - w) % 2 == 1 then w = w - 1 end              -- even air, so both sides match
+    local mx = left + ((space - w) / 2) * px
+    local mw = math.max(1, w) * px
     m.x, m.w, m.h = mx, mw, h
     m.track:ClearAnchors()
     m.track:SetAnchor(TOPLEFT, self.body, TOPLEFT, mx, 0)
