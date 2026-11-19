@@ -5,7 +5,7 @@ SKT = SKT or {}
 local SKT = SKT
 
 SKT.name    = "SKTools-ESO"
-SKT.version = "0.28.4"
+SKT.version = "0.39.1"
 SKT.author  = "Scotskoogen-Chris"
 SKT.svName  = "SKToolsESO_SV"
 SKT.svVer   = 1
@@ -91,10 +91,50 @@ end
 -- elements that can be unlocked and moved (each has db.locked, db.enabled and :ApplyLock())
 function SKT:Movables()
     local list = {}
-    for _, m in ipairs({ self.Resources, self.Skills, self.CC, self.Minimap, self.Buffs, self.Instance, self.Group, self.Synergy, self.Shared }) do
+    for _, m in ipairs({ self.Resources, self.Skills, self.CC, self.Minimap, self.Buffs, self.Instance, self.Group, self.Synergy, self.Shared, self.Prompts }) do
         if m and m.db then list[#list + 1] = m end
     end
     return list
+end
+
+---------------------------------------------------------------------------
+-- Test group: while elements are unlocked, a made-up group of 4 or 12 fills the group buffs,
+-- synergy grid and DPS meter, to place and size them. SKT.db.testGroup: 0 (off), 4 or 12.
+---------------------------------------------------------------------------
+local TEST_MEMBERS = {
+    { "Ironhide", LFG_ROLE_TANK },  { "Mendwell", LFG_ROLE_HEAL }, { "Ashblade", LFG_ROLE_DPS },
+    { "Quickfang", LFG_ROLE_DPS },  { "Stoneward", LFG_ROLE_TANK }, { "Dawnbloom", LFG_ROLE_HEAL },
+    { "Emberveil", LFG_ROLE_DPS },  { "Frostmark", LFG_ROLE_DPS }, { "Nightsong", LFG_ROLE_DPS },
+    { "Stormcall", LFG_ROLE_DPS },  { "Grimshot", LFG_ROLE_DPS },  { "Sunreaver", LFG_ROLE_DPS },
+}
+local TEST_PREFIX = "skttest"
+
+function SKT:TestSize()
+    local n = self.db and self.db.testGroup or 0
+    if self.db and self.db.locked == false and (n == 4 or n == 12) then return n end
+    return 0
+end
+function SKT:TestTags()
+    local tags = {}
+    for i = 1, self:TestSize() do tags[i] = TEST_PREFIX .. i end
+    return tags
+end
+function SKT.IsTestTag(tag) return type(tag) == "string" and tag:sub(1, #TEST_PREFIX) == TEST_PREFIX end
+local function TestIndex(tag) return tonumber(tag:sub(#TEST_PREFIX + 1)) end
+function SKT.TestName(tag) local m = TEST_MEMBERS[TestIndex(tag)]; return m and m[1] or "" end
+function SKT.TestRole(tag) local m = TEST_MEMBERS[TestIndex(tag)]; return m and m[2] or nil end
+function SKT.TestIndex(tag) return TestIndex(tag) end
+-- a unit's name, test members included
+function SKT.UnitName(tag)
+    if SKT.IsTestTag(tag) then return SKT.TestName(tag) end
+    return zo_strformat("<<1>>", GetUnitName(tag))
+end
+
+-- everything that shows the test group, redrawn
+function SKT:RefreshTest()
+    if self.Group and self.Group.root then self.Group:Refresh() end
+    if self.Synergy and self.Synergy.root then self.Synergy:Refresh() end
+    if self.Shared and self.Shared.panels then self.Shared:RenderAll() end
 end
 
 -- lock or unlock every element at once
@@ -104,9 +144,18 @@ function SKT:SetLocked(locked)
         m.db.locked = self.db.locked
         m:ApplyLock()
     end
+    self:RefreshTest()
     if self.lockBox then ZO_CheckButton_SetCheckState(self.lockBox, self.db.locked) end
 end
 
+-- to the chat as a system message (shows in every chat tab, also with chat addons that hide d())
 function SKT:Print(msg)
-    d("|cF2C14E[SKTools]|r " .. tostring(msg))
+    local text = "|cF2C14E[SKTools]|r " .. tostring(msg)
+    if CHAT_ROUTER and CHAT_ROUTER.AddSystemMessage then
+        CHAT_ROUTER:AddSystemMessage(text)
+    elseif CHAT_SYSTEM and CHAT_SYSTEM.AddMessage then
+        CHAT_SYSTEM:AddMessage(text)
+    else
+        d(text)
+    end
 end

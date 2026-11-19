@@ -45,6 +45,7 @@ local function Key(name) return zo_strlower(zo_strformat("<<1>>", name or "")) e
 local RoleRank
 -- a member's role: tank 1, healer 2, damage 3, none chosen 4
 local function Role(tag)
+    if SKT.IsTestTag(tag) then return SKT.TestRole(tag) end
     return GetGroupMemberSelectedRole and GetGroupMemberSelectedRole(tag) or nil
 end
 RoleRank = function(tag)
@@ -67,12 +68,14 @@ Gp.RoleIcon = function(tag) return RoleIcon(tag) end
 function Gp:Members()
     local tags = {}
     local n = GetGroupSize()
-    if n and n > 0 then
+    if SKT:TestSize() > 0 then
+        tags = SKT:TestTags()
+    elseif n and n > 0 then
         for i = 1, n do
             local tag = GetGroupUnitTagByIndex(i)
             if tag and DoesUnitExist(tag) then tags[#tags + 1] = tag end
         end
-    elseif self.db.showSolo or not self.db.locked then
+    elseif not self.db.locked then
         tags[1] = "player"
     end
     -- tanks first, then healers, then damage dealers (the group's own order within each)
@@ -88,12 +91,33 @@ function Gp:Members()
     return tags
 end
 
+-- a test member's effects: made up, the same each time for the same member and effect; timed ones
+-- run over and over (20 s, each starting at its own point), some last, some are missing
+function Gp:TestHas(tag)
+    local has, i = {}, SKT.TestIndex(tag) or 1
+    local now = GetFrameTimeSeconds()
+    for c, name in ipairs(self.db.list or {}) do
+        local kind = (i * 7 + c * 3) % 5
+        if kind == 0 then
+            -- missing
+        elseif kind == 1 then
+            has[Key(name)] = { started = 0, ending = 0, permanent = true }
+        else
+            local period = 20
+            local started = now - ((now + i * 3.1 + c * 1.7) % period)
+            has[Key(name)] = { started = started, ending = started + period, permanent = false }
+        end
+    end
+    return has
+end
+
 -- tag -> { [effect key] = { ending, permanent } }
 function Gp:Scan(tags)
     local out = {}
     for _, tag in ipairs(tags) do
         local has = {}
-        for i = 1, GetNumBuffs(tag) do
+        if SKT.IsTestTag(tag) then has = self:TestHas(tag) end
+        for i = 1, (SKT.IsTestTag(tag) and 0 or GetNumBuffs(tag)) do
             local name, started, ending, _, _, icon = GetUnitBuffInfo(tag, i)
             if name and name ~= "" then
                 local k = Key(name)
@@ -216,7 +240,9 @@ function Gp:Render()
     local tags = self.tags or {}
     local list = db.list
     -- only in combat (if chosen): hidden out of combat, except while unlocked to place it
-    local outOfCombat = db.combatOnly and db.locked and not IsUnitInCombat("player")
+    -- only in a group; always there, or only in combat (as chosen); unlocked always, to place it
+    local outOfCombat = db.locked and (not IsUnitGrouped("player")
+        or (db.visibility == "combat" and not IsUnitInCombat("player")))
     if not db.enabled or #tags == 0 or #list == 0 or outOfCombat then
         self.cells.n, self.names.n, self.lines.n = 0, 0, 0
         Done(self.cells); Done(self.names); Done(self.lines)
@@ -227,14 +253,17 @@ function Gp:Render()
     local trim = G.Trim()
     local px = D.Px()
     local s = D.OnPx(G.Boxes(db.size))
+    -- the members' rows: their own height (the icon row on top stays square)
+    local hh = D.OnPx(G.Boxes(db.rowHeight or db.size))
+    local m = math.min(s, hh)
     local nameW = D.OnPx(G.Boxes(db.nameWidth))
     local cols, rows = #list, #tags + 1
     local W = nameW + cols * s - trim
-    local H = rows * s - trim
+    local H = s + #tags * hh - trim
     local bg = SKT.colors.bg
-    local fontName = "$(MEDIUM_FONT)|" .. math.max(10, math.floor(s * 0.5)) .. "|soft-shadow-thin"
-    local fontNum = "$(BOLD_FONT)|" .. math.max(8, math.floor(s * 0.42)) .. "|thick-outline"
-    local numDown = D.OnPx(math.floor(s * 0.42) * 0.14)
+    local fontName = "$(MEDIUM_FONT)|" .. math.max(10, math.floor(m * 0.5)) .. "|soft-shadow-thin"
+    local fontNum = "$(BOLD_FONT)|" .. math.max(8, math.floor(m * 0.42)) .. "|thick-outline"
+    local numDown = D.OnPx(math.floor(m * 0.42) * 0.14)
     local now = GetFrameTimeSeconds()
 
     self.cells.n, self.names.n, self.lines.n = 0, 0, 0
@@ -247,9 +276,10 @@ function Gp:Render()
     end
 
     for r = 1, rows do
-        local y = (r - 1) * s
+        local y = (r == 1) and 0 or (s + (r - 2) * hh)
         local lastRow = (r == rows)
-        local rowH = lastRow and (s - trim) or s
+        local full = (r == 1) and s or hh
+        local rowH = lastRow and (full - trim) or full
         local tag = tags[r - 1]
         local dim = false
 
@@ -259,11 +289,11 @@ function Gp:Render()
             nm:ClearAnchors()
             nm:SetAnchor(TOPLEFT, self.root, TOPLEFT, 0, y)
             nm:SetDimensions(nameW, rowH)
-            D.Solid(nm.bg, bg[1], bg[2], bg[3], 0.92)
+            D.Solid(nm.bg, bg[1], bg[2], bg[3], (db.nameAlpha or 30) / 100)
             nm.text:SetFont(fontName)
             -- the role's icon before the name (tank, healer, damage)
             local icon = db.roleIcons and RoleIcon(tag)
-            local ri = D.OnPx(s * 0.8)
+            local ri = D.OnPx(m * 0.8)
             nm.role:ClearAnchors()
             nm.role:SetAnchor(LEFT, nm, LEFT, D.OnPx(3), 0)
             nm.role:SetDimensions(ri, ri)
@@ -274,7 +304,8 @@ function Gp:Render()
             nm.text:SetAnchor(LEFT, nm, LEFT, textX, 0)
             nm.text:SetWidth(nameW - textX - D.OnPx(3))
             local name = db.accountNames and GetUnitDisplayName(tag) or zo_strformat("<<1>>", GetUnitName(tag))
-            dim = IsUnitDead(tag) or not IsUnitOnline(tag)
+            if SKT.IsTestTag(tag) then name = SKT.TestName(tag) end
+            dim = not SKT.IsTestTag(tag) and (IsUnitDead(tag) or not IsUnitOnline(tag))
             nm.text:SetText(name or "")
             nm.text:SetColor(dim and 0.55 or 0.92, dim and 0.55 or 0.92, dim and 0.6 or 0.95, 1)
         end
@@ -289,12 +320,15 @@ function Gp:Render()
             D.Solid(f.bg, 0, 0, 0, CELL_BG_ALPHA)
             f.num:SetFont(fontNum)
             f.num:ClearAnchors()
-            f.num:SetAnchor(CENTER, f, TOPLEFT, s / 2, s / 2 + numDown)
+            f.num:SetAnchor(CENTER, f, TOPLEFT, s / 2, full / 2 + numDown)
             f.dash:ClearAnchors()
-            f.dash:SetAnchor(CENTER, f, TOPLEFT, s / 2, s / 2)
-            f.dash:SetDimensions(D.OnPx(s * 0.32), math.max(px, D.OnPx(s * 0.06)))
+            f.dash:SetAnchor(CENTER, f, TOPLEFT, s / 2, full / 2)
+            f.dash:SetDimensions(D.OnPx(m * 0.32), math.max(px, D.OnPx(m * 0.06)))
             D.Solid(f.dash, 0.75, 0.76, 0.8, 0.8)
-            f.entry, f.ending = nil, nil
+            f.entry, f.ending, f.started = nil, nil, nil
+            f.cellW = (c == cols) and (s - trim) or s
+            f.green:ClearAnchors()
+            f.green:SetAnchorFill(f)
             f:SetAlpha(1)
 
             local function NoSweep()
@@ -321,19 +355,14 @@ function Gp:Render()
                     D.Solid(f.green, HAS_GREEN[1], HAS_GREEN[2], HAS_GREEN[3], HAS_ALPHA)
                     f.dash:SetHidden(true)
                     if not h.permanent and h.ending > now then
-                        f.green:SetHidden(true)
-                        f.ending = h.ending
-                        local total = math.max(0.1, h.ending - h.started)
-                        local key = h.started .. ":" .. h.ending
-                        -- the skill bars' global cooldown sweep, in green: the green is what's left
-                        -- (started again only when the effect is new or refreshed)
-                        f.cd:SetFillColor(HAS_GREEN[1], HAS_GREEN[2], HAS_GREEN[3], HAS_ALPHA)
-                        if f.cdKey ~= key then
-                            f.cd:StartCooldown((h.ending - now) * 1000, total * 1000,
-                                CD_TYPE_RADIAL, CD_TIME_TYPE_TIME_UNTIL, false)
-                            f.cdKey = key
-                        end
-                        f.cd:SetHidden(false)
+                        -- full green when gained, draining from the right: the green (left) is
+                        -- what's left, the black the time used (moved along in :Tick)
+                        NoSweep()
+                        f.ending, f.started = h.ending, h.started
+                        f.green:ClearAnchors()
+                        f.green:SetAnchor(TOPLEFT, f, TOPLEFT, 0, 0)
+                        f.green:SetAnchor(BOTTOMLEFT, f, BOTTOMLEFT, 0, 0)
+                        f.green:SetHidden(false)
                     else
                         f.green:SetHidden(false)
                         NoSweep()
@@ -351,7 +380,7 @@ function Gp:Render()
         if tag then Line(nameW - px, y, px, rowH) end
         if not lastRow then
             -- under the top row only below the icons (the frame draws the name column's top)
-            if tag then Line(0, y + s - px, W, px) else Line(nameW, y + s - px, W - nameW, px) end
+            if tag then Line(0, y + full - px, W, px) else Line(nameW, y + s - px, W - nameW, px) end
         end
     end
     Done(self.cells); Done(self.names); Done(self.lines)
@@ -402,13 +431,23 @@ end
 
 function Gp:Tick(now)
     now = now or GetFrameTimeSeconds()
+    local again = false
     local show = self.db.timers
     for i = 1, #self.cells.list do
         local f = self.cells.list[i]
         if not f:IsHidden() and f.ending then
             local left = f.ending - now
             f.num:SetText((show and left > 0) and Secs(left) or "")
+            local total = math.max(0.1, f.ending - (f.started or f.ending))
+            local frac = math.max(0, math.min(1, left / total))
+            f.green:SetWidth(math.max(0.01, (f.cellW or 0) * frac))
+            f.green:SetHidden(frac <= 0)
+            if left <= 0 and SKT:TestSize() > 0 then again = true end
         end
+    end
+    if again and not self.testQueued then
+        self.testQueued = true
+        zo_callLater(function() self.testQueued = false; self:Refresh() end, 50)
     end
 end
 
@@ -465,7 +504,7 @@ function Gp:RegisterEvents()
         if GetGroupSize() == 0 then Q() end
     end)
     EM:AddFilterForEvent(NS .. "Self", EVENT_EFFECT_CHANGED, REGISTER_FILTER_UNIT_TAG, "player")
-    EM:RegisterForUpdate(NS .. "Tick", 200, function() self:Tick() end)
+    EM:RegisterForUpdate(NS .. "Tick", 33, function() self:Tick() end)   -- smooth drain
     EM:RegisterForEvent(NS .. "Combat", EVENT_PLAYER_COMBAT_STATE, function() self:Refresh() end)
     EM:RegisterForEvent(NS .. "Scale", EVENT_ALL_GUI_SCREENS_RESIZED, function() self:Render() end)
 end
@@ -481,14 +520,14 @@ SKT:RegisterModule({
     defaults = {
         enabled = true,
         locked  = true,
-        showSolo = false,       -- show yourself while not in a group
-        combatOnly = false,     -- only while you're in combat
+        visibility = "always",  -- in a group: "always" or "combat"
         sortRoles = true,       -- tanks, then healers, then damage dealers
         roleIcons = true,       -- the role's icon before each name
         accountNames = false,   -- @names instead of character names
         timers = true,
         size = 24,
         nameWidth = 120,
+        nameAlpha = 30,         -- % opacity of the name cells' background
         x = -640, y = -200,     -- top left, from the middle of the screen
         icons = {},             -- effect name (lower case) -> icon, learnt in play
     },
@@ -511,10 +550,9 @@ SKT:RegisterModule({
 
         L:Header("Group buffs")
         L:Check("Enable", function() return db.enabled end, function(v) db.enabled = v; Gp:ApplyEnabled() end)
-        L:Check("Only in combat", function() return db.combatOnly end,
-            function(v) db.combatOnly = v; render() end)
-        L:Check("Show yourself when not in a group", function() return db.showSolo end,
-            function(v) db.showSolo = v; render() end)
+        L:ChoiceRow({ { "always", "Always" }, { "combat", "In combat" } },
+            function() return db.visibility or "always" end, function(v) db.visibility = v; render() end)
+        L:Space(6)
         L:Check("Account names (@name)", function() return db.accountNames end,
             function(v) db.accountNames = v; render() end)
         L:Check("Sort by role", function() return db.sortRoles end,
@@ -524,10 +562,16 @@ SKT:RegisterModule({
         L:Check("Time left", function() return db.timers end, function(v) db.timers = v; render() end)
 
         L:Header("Size")
-        L:Slider("Cell size", 16, 48, 1,
+        L:Slider("Cell width", 16, 48, 1,
             function() return db.size end, function(v) db.size = v; render() end, SKT.Grid.Fmt)
+        L:Slider("Cell height", 8, 48, 1,
+            function() return db.rowHeight or db.size end, function(v) db.rowHeight = v; render() end,
+            SKT.Grid.Fmt)
         L:Slider("Name width", 48, 240, 8,
             function() return db.nameWidth end, function(v) db.nameWidth = v; render() end, SKT.Grid.Fmt)
+        L:Slider("Name background opacity", 0, 100, 5,
+            function() return db.nameAlpha or 30 end, function(v) db.nameAlpha = v; render() end,
+            function(v) return v .. "%" end)
 
         -- the watched effects, in column order: add by name, move up and down, remove
         R:Header("Watched effects")

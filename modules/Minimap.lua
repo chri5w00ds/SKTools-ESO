@@ -27,6 +27,10 @@ local VIEW_CONE = "SKTools-ESO/Media/ViewCone.dds"
 local BEE = "SKTools-ESO/Media/Logo.dds"   -- the SKTools bee (faces right)
 local CONE_SIZE = 0.444
 local CIRCLE = "SKTools-ESO/Media/Circle.dds"
+-- the frame: a polished silver ring, as the WoW SKTools widget frames (Media/MinimapRing.dds, 512 px,
+-- its hole 235 px across the middle: the map fills it, the ring just over the map's edge)
+local FRAME = "SKTools-ESO/Media/MinimapRing.dds"
+local FRAME_SCALE = 256 / 235
 local QUEST_ICON = "EsoUI/Art/Compass/quest_icon.dds"
 local QUEST_ICON_FOCUS = "EsoUI/Art/Compass/quest_icon_assisted.dds"
 local GROUP_COLOR  = { 0.45, 0.72, 0.92 }   -- pastel blue
@@ -54,6 +58,10 @@ function M:Build()
 
     -- the silver ring: a silver disk a pixel bigger than the map, behind it
     self.disk = D.Tex(root, 0)
+    self.frame = WM:CreateControl(NS .. "Frame", root, CT_TEXTURE)
+    self.frame:SetTexture(FRAME)
+    self.frame:SetDrawTier(DT_HIGH)
+    self.frame:SetDrawLevel(9)
     self.viewBg = D.Tex(root, 0)
     self.viewBg:SetAnchorFill(view)
     D.Solid(self.viewBg, 0.05, 0.07, 0.14, 1)
@@ -155,7 +163,9 @@ function M:Layout()
     local stripH = db.showZone and D.OnPx(fontSize * 1.35 + 12) or 0
     -- the bee keeps its original size (a line's height), whatever the strip
     local beeH = D.OnPx(fontSize * 1.35 + 6)
+    -- with the frame: the gap also clears the part of the frame that stands out past the map
     self.gap = D.OnPx(6)
+    if db.frame ~= false then self.gap = D.OnPx(6 + w * (FRAME_SCALE - 1) / 2) end
     local top = db.showZone and (stripH + self.gap) or 0
 
     self.info:ClearAnchors()
@@ -232,6 +242,14 @@ function M:Layout()
     local r1, g1, b1 = SilverAt(0)
     local r2, g2, b2 = SilverAt(1)
     D.VGrad(self.disk, r1, g1, b1, 1, r2, g2, b2, 1)
+    -- the silver frame round the map (or, without it, the thin ring the disk makes)
+    local framed = db.frame ~= false
+    self.frame:ClearAnchors()
+    self.frame:SetAnchor(CENTER, self.view, CENTER, 0, 0)
+    local fs = D.OnPx(w * FRAME_SCALE)
+    self.frame:SetDimensions(fs, fs)
+    self.frame:SetHidden(not framed)
+    self.disk:SetHidden(framed)
 
     self.root:ClearAnchors()
     local left = G.SnapOne((db.x or 0) - s / 2)
@@ -293,8 +311,8 @@ function M:GetPin()
     return t
 end
 
-local function Place(m, t, x, y, size, tex, level)
-    size = size * ((m.db.pinSize or 100) / 100)
+local function Place(m, t, x, y, size, tex, level, scale)
+    size = size * ((scale or m.db.pinSize or 100) / 100)
     t:SetTexture(tex)
     t:SetDrawLevel(level or 3)
     t:SetDimensions(size, size)
@@ -377,10 +395,11 @@ function M:LayoutGroupPins()
                     local leader = IsUnitGroupLeader(tag)
                     local size = leader and 12 or 9
                     local back = self:GetPin()
-                    Place(self, back, x, y, size + 4, CIRCLE, 6)
+                    local gs = self.db.groupSize or 100
+                    Place(self, back, x, y, size + 4, CIRCLE, 6, gs)
                     back:SetColor(0, 0, 0, 0.85)
                     local t = self:GetPin()
-                    Place(self, t, x, y, size, CIRCLE, 7)
+                    Place(self, t, x, y, size, CIRCLE, 7, gs)
                     local c = leader and LEADER_COLOR or GROUP_COLOR
                     t:SetColor(c[1], c[2], c[3], 1)
                 end
@@ -552,6 +571,7 @@ SKT:RegisterModule({
         zoom = 6,                 -- how many times the map window the whole map is
         bgAlpha = 90,
         showZone = true,
+        frame = true,             -- the silver frame round the map
         showTimeLocal = true,
         showCone = true,          -- the camera's view cone
         pinQuest = true,
@@ -559,6 +579,7 @@ SKT:RegisterModule({
         pinWaypoint = true,
         pinGroup = true,
         pinSize = 100,            -- % of the pins' own sizes (50 to 300)
+        groupSize = 100,          -- % of the group dots' size (50 to 300)
     },
 
     OnLoad = function(self, db)
@@ -626,6 +647,7 @@ SKT:RegisterModule({
         R:Check("Location", function() return db.showZone end, function(v) db.showZone = v; relayout() end)
         R:Check("Your own time", function() return db.showTimeLocal end, function(v) db.showTimeLocal = v; relayout() end)
         R:Check("Camera view cone", function() return db.showCone end, function(v) db.showCone = v; relayout() end)
+        R:Check("Silver frame", function() return db.frame ~= false end, function(v) db.frame = v; relayout() end)
 
         R:Header("Pins")
         local function pins() M:RefreshPins() end
@@ -637,6 +659,10 @@ SKT:RegisterModule({
         R:Slider("Pin size", 5, 30, 1,
             function() return zo_round((db.pinSize or 100) / 10) end,
             function(v) db.pinSize = v * 10; pins() end,
+            function(v) return string.format("%.1f", v / 10) end)
+        R:Slider("Group icon size", 5, 30, 1,
+            function() return zo_round((db.groupSize or 100) / 10) end,
+            function(v) db.groupSize = v * 10; pins() end,
             function(v) return string.format("%.1f", v / 10) end)
     end,
 })

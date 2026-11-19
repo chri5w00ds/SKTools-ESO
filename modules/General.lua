@@ -30,6 +30,11 @@ SKT:RegisterModule({
             function(v) SKT.db.grid = v; relayoutAll() end,
             function(v) return v .. " px" end)
 
+        L:Header("Test group (while unlocked)")
+        L:Choice({ { 0, "Off" }, { 4, "4 players" }, { 12, "12 players" } },
+            function() return SKT.db.testGroup or 0 end,
+            function(v) SKT.db.testGroup = v; SKT:RefreshTest() end)
+
         L:Header("Profile")
         L:Check("Character-specific settings",
             function() return SKT.meta.useCharacterProfile end,

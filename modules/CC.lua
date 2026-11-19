@@ -249,7 +249,7 @@ local function OnCC(_, result, isError, abilityName, abilityGraphic, _, _, sourc
         return
     end
     local secs = (hitValue and hitValue > 0 and hitValue < 60000) and (hitValue / 1000) or (db.fallback or 3)
-    local icon = (abilityGraphic and abilityGraphic ~= "") and abilityGraphic or (abilityId and GetAbilityIcon(abilityId))
+    local icon = abilityId and GetAbilityIcon(abilityId) or nil   -- the event's "graphic" is a number, not a texture
     C:Show(kind, abilityName, icon, secs)
 end
 

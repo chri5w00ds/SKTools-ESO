@@ -94,6 +94,93 @@ function SKT.UI.Column(page, x, width)
         self.y = self.y + 34
         return unpack(out)
     end
+    -- one of several: ticks that act as radio buttons. options = { { value, text }, ... }
+    function c:Choice(options, get, set)
+        local boxes = {}
+        local function Sync()
+            for _, b in ipairs(boxes) do ZO_CheckButton_SetCheckState(b.cb, get() == b.value) end
+        end
+        for _, o in ipairs(options) do
+            local value = o[1]
+            local cb = self:Check(o[2], function() return get() == value end, function()
+                set(value); Sync()
+            end)
+            boxes[#boxes + 1] = { cb = cb, value = value }
+        end
+        return boxes
+    end
+    -- a colour: its name, a swatch (click: ESO's colour picker) and Reset. get() -> {r,g,b} or nil
+    -- (nil: the default), set({r,g,b} or nil), default = {r,g,b}
+    -- the same, side by side on one line (short labels)
+    function c:ChoiceRow(options, get, set)
+        local boxes = {}
+        local function Sync()
+            for _, b in ipairs(boxes) do ZO_CheckButton_SetCheckState(b.cb, get() == b.value) end
+        end
+        -- each one after the last one's label (measured), so long labels never run into the next
+        local x = self.x
+        for _, o in ipairs(options) do
+            local value = o[1]
+            local cb = SKT.UI.Checkbox(page, Id(), x, self.y, o[2],
+                function() return get() == value end, function() set(value); Sync() end)
+            boxes[#boxes + 1] = { cb = cb, value = value }
+            local label = cb.label or GetControl(cb, "Label")
+            local tw = (label and label:GetTextWidth()) or (#o[2] * 8)
+            x = x + 24 + tw + 18
+        end
+        self.y = self.y + 26
+        return boxes
+    end
+    -- a colour: its name, a swatch (click: ESO's colour picker) and Reset. get() -> {r,g,b} or nil
+    -- (nil: the default), set({r,g,b} or nil), default = {r,g,b}; enabled() (optional): when false
+    -- the row is dimmed and the swatch doesn't open. Returns Paint (call it to redraw the row).
+    function c:Color(text, get, set, default, enabled)
+        local id = page:GetName() .. Id()
+        local lbl = WM:CreateControl(id .. "L", page, CT_LABEL)
+        lbl:SetFont("ZoFontGame")
+        lbl:SetText(text)
+        lbl:SetAnchor(TOPLEFT, page, TOPLEFT, self.x, self.y + 4)
+        lbl:SetDimensions(self.w - 56 - 80 - 16, 22)
+        lbl:SetMaxLineCount(1)
+        lbl:SetWrapMode(TEXT_WRAP_MODE_ELLIPSIS)
+        local sw = WM:CreateControl(id .. "S", page, CT_TEXTURE)
+        sw:SetDimensions(56, 16)
+        sw:SetAnchor(TOPLEFT, page, TOPLEFT, self.x + self.w - 56 - 88, self.y + 7)
+        local edge = WM:CreateControl(id .. "E", sw, CT_BACKDROP)
+        edge:SetAnchor(TOPLEFT, sw, TOPLEFT, -1, -1)
+        edge:SetAnchor(BOTTOMRIGHT, sw, BOTTOMRIGHT, 1, 1)
+        edge:SetCenterColor(0, 0, 0, 0)
+        edge:SetEdgeColor(0.85, 0.85, 0.88, 1)
+        edge:SetEdgeTexture("", 1, 1, 1, 0)
+        -- the click: a plain button over the swatch (a little bigger, easy to hit)
+        local hit = WM:CreateControl(id .. "B", page, CT_BUTTON)
+        hit:SetAnchor(TOPLEFT, sw, TOPLEFT, -3, -4)
+        hit:SetAnchor(BOTTOMRIGHT, sw, BOTTOMRIGHT, 3, 4)
+        hit:SetDrawLevel(10)
+        hit:SetMouseEnabled(true)
+        local reset = SKT.UI.Button(page, Id(), self.x + self.w - 80, self.y, "Reset", 80, function() end)
+        local function On() return not enabled or enabled() end
+        local function Paint()
+            local col = get() or default
+            local on = On()
+            sw:SetColor(col[1] or col.r, col[2] or col.g, col[3] or col.b, on and 1 or 0.35)
+            lbl:SetColor(SKT.col(on and SKT.colors.text or SKT.colors.muted))
+            hit:SetEnabled(on)
+            reset:SetEnabled(on and get() ~= nil)
+        end
+        hit:SetHandler("OnClicked", function()
+            if not On() then return end
+            local col = get() or default
+            COLOR_PICKER:Show(function(r, g, b) set({ r, g, b }); Paint() end,
+                col[1] or col.r, col[2] or col.g, col[3] or col.b, 1, text)
+        end)
+        hit:SetHandler("OnMouseEnter", function() if On() then edge:SetEdgeColor(0.95, 0.76, 0.31, 1) end end)
+        hit:SetHandler("OnMouseExit", function() edge:SetEdgeColor(0.85, 0.85, 0.88, 1) end)
+        reset:SetHandler("OnClicked", function() set(nil); Paint() end)
+        Paint()
+        self.y = self.y + 36
+        return Paint
+    end
     function c:Text(text)
         local t = SKT.UI.Text(page, Id(), self.x, self.y, text, self.w)
         self.y = self.y + math.max(20, (t:GetTextHeight() or 20)) + 6
