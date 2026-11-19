@@ -33,6 +33,34 @@ local FRAME = "SKTools-ESO/Media/MinimapRing.dds"
 local FRAME_SCALE = 256 / 235
 local QUEST_ICON = "EsoUI/Art/Compass/quest_icon.dds"
 local QUEST_ICON_FOCUS = "EsoUI/Art/Compass/quest_icon_assisted.dds"
+
+-- a quest pin's icon, as the game's own map and compass pick it: normal, repeatable or zone story;
+-- the focused quest's brighter version; and the door version when the objective is behind a door
+-- (inside a building or delve: the game marks those steps as breadcrumbs)
+local function Set(...)
+    local t = {}
+    for _, v in pairs({ ... }) do t[v] = true end
+    return t
+end
+local REPEATABLE = Set(MAP_PIN_TYPE_ASSISTED_QUEST_REPEATABLE_CONDITION, MAP_PIN_TYPE_ASSISTED_QUEST_REPEATABLE_OPTIONAL_CONDITION,
+    MAP_PIN_TYPE_ASSISTED_QUEST_REPEATABLE_ENDING, MAP_PIN_TYPE_TRACKED_QUEST_REPEATABLE_CONDITION,
+    MAP_PIN_TYPE_TRACKED_QUEST_REPEATABLE_OPTIONAL_CONDITION, MAP_PIN_TYPE_TRACKED_QUEST_REPEATABLE_ENDING,
+    MAP_PIN_TYPE_QUEST_REPEATABLE_CONDITION, MAP_PIN_TYPE_QUEST_REPEATABLE_OPTIONAL_CONDITION, MAP_PIN_TYPE_QUEST_REPEATABLE_ENDING)
+local ZONE_STORY = Set(MAP_PIN_TYPE_ASSISTED_QUEST_ZONE_STORY_CONDITION, MAP_PIN_TYPE_ASSISTED_QUEST_ZONE_STORY_OPTIONAL_CONDITION,
+    MAP_PIN_TYPE_ASSISTED_QUEST_ZONE_STORY_ENDING, MAP_PIN_TYPE_TRACKED_QUEST_ZONE_STORY_CONDITION,
+    MAP_PIN_TYPE_TRACKED_QUEST_ZONE_STORY_OPTIONAL_CONDITION, MAP_PIN_TYPE_TRACKED_QUEST_ZONE_STORY_ENDING,
+    MAP_PIN_TYPE_QUEST_ZONE_STORY_CONDITION, MAP_PIN_TYPE_QUEST_ZONE_STORY_OPTIONAL_CONDITION, MAP_PIN_TYPE_QUEST_ZONE_STORY_ENDING)
+local ASSISTED = Set(MAP_PIN_TYPE_ASSISTED_QUEST_CONDITION, MAP_PIN_TYPE_ASSISTED_QUEST_OPTIONAL_CONDITION,
+    MAP_PIN_TYPE_ASSISTED_QUEST_ENDING, MAP_PIN_TYPE_ASSISTED_QUEST_REPEATABLE_CONDITION,
+    MAP_PIN_TYPE_ASSISTED_QUEST_REPEATABLE_OPTIONAL_CONDITION, MAP_PIN_TYPE_ASSISTED_QUEST_REPEATABLE_ENDING,
+    MAP_PIN_TYPE_ASSISTED_QUEST_ZONE_STORY_CONDITION, MAP_PIN_TYPE_ASSISTED_QUEST_ZONE_STORY_OPTIONAL_CONDITION,
+    MAP_PIN_TYPE_ASSISTED_QUEST_ZONE_STORY_ENDING)
+
+local function QuestIcon(pinType, focus, behindDoor)
+    local base = (REPEATABLE[pinType] and "repeatableQuest") or (ZONE_STORY[pinType] and "zoneStoryQuest") or "quest"
+    local assisted = focus or ASSISTED[pinType]
+    return "EsoUI/Art/Compass/" .. base .. "_icon" .. (behindDoor and "_door" or "") .. (assisted and "_assisted" or "") .. ".dds"
+end
 local GROUP_COLOR  = { 0.45, 0.72, 0.92 }   -- pastel blue
 local LEADER_COLOR = { 0.95, 0.76, 0.31 }   -- gold   -- the texture's width as a share of the map's (the cone: 20 % of it)
 
@@ -346,7 +374,7 @@ function M:CollectPins()
                             for _, c in pairs(step) do
                                 if type(c) == "table" and c.xLoc and c.insideCurrentMapWorld ~= false then
                                     list[#list + 1] = { x = c.xLoc, y = c.yLoc, size = focus and 26 or 20,
-                                        tex = focus and QUEST_ICON_FOCUS or QUEST_ICON, level = focus and 5 or 4 }
+                                        tex = QuestIcon(c.pinType, focus, c.isBreadcrumb), level = focus and 5 or 4 }
                                 end
                             end
                         end
@@ -391,7 +419,15 @@ function M:LayoutGroupPins()
             local tag = GetGroupUnitTagByIndex(i)
             if tag and not AreUnitsEqual(tag, "player") and IsUnitOnline(tag) then
                 local x, y = GetMapPlayerPosition(tag)
-                if x and y and (x > 0 or y > 0) then
+                local door = IsUnitWorldMapPositionBreadcrumbed and IsUnitWorldMapPositionBreadcrumbed(tag)
+                if x and y and (x > 0 or y > 0) and door then
+                    -- inside somewhere (behind a door): the game's door icon for them
+                    local leader = IsUnitGroupLeader(tag)
+                    local t = self:GetPin()
+                    Place(self, t, x, y, leader and 22 or 18,
+                        leader and "EsoUI/Art/Compass/groupLeader_door.dds" or "EsoUI/Art/Compass/groupMember_door.dds",
+                        7, self.db.groupSize or 100)
+                elseif x and y and (x > 0 or y > 0) then
                     local leader = IsUnitGroupLeader(tag)
                     local size = leader and 12 or 9
                     local back = self:GetPin()
