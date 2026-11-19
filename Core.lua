@@ -5,7 +5,7 @@ SKT = SKT or {}
 local SKT = SKT
 
 SKT.name    = "SKTools-ESO"
-SKT.version = "0.7.0"
+SKT.version = "0.26.3"
 SKT.author  = "Scotskoogen-Chris"
 SKT.svName  = "SKToolsESO_SV"
 SKT.svVer   = 1
@@ -20,6 +20,11 @@ SKT.colors = {
     muted     = { 0.60, 0.64, 0.72, 1.00 },
     tabActive = { 0.16, 0.22, 0.38, 1.00 },
     tabIdle   = { 0.09, 0.12, 0.22, 1.00 },
+    -- the settings window's ESO trim
+    panelBg   = { 0.078, 0.11, 0.20, 1.00 },
+    panelEdge = { 0.17, 0.21, 0.31, 1.00 },
+    bronze    = { 0.54, 0.46, 0.31, 1.00 },
+    gold      = { 0.79, 0.65, 0.35, 1.00 },
 }
 
 -- Defaults for the shared profile. Modules add their own defaults via RegisterModule.
@@ -27,6 +32,7 @@ SKT.defaults = {
     window = { x = nil, y = nil },
     lastTab = "General",
     snap = true,      -- moved elements snap to a grid (shown while unlocked)
+    locked = true,    -- one lock for every element
     grid = 8,
 }
 
@@ -80,6 +86,25 @@ end
 
 function SKT:SetCharacterProfile(enabled)
     self.meta.useCharacterProfile = enabled and true or false
+end
+
+-- elements that can be unlocked and moved (each has db.locked, db.enabled and :ApplyLock())
+function SKT:Movables()
+    local list = {}
+    for _, m in ipairs({ self.Resources, self.Skills, self.CC, self.Minimap, self.Buffs, self.Instance, self.Group }) do
+        if m and m.db then list[#list + 1] = m end
+    end
+    return list
+end
+
+-- lock or unlock every element at once
+function SKT:SetLocked(locked)
+    self.db.locked = locked and true or false
+    for _, m in ipairs(self:Movables()) do
+        m.db.locked = self.db.locked
+        m:ApplyLock()
+    end
+    if self.lockBox then ZO_CheckButton_SetCheckState(self.lockBox, self.db.locked) end
 end
 
 function SKT:Print(msg)

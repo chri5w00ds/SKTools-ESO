@@ -9,14 +9,13 @@ SKT:RegisterModule({
     order = 999,
 
     BuildTab = function(self, page)
-        SKT.UI.Header(page, "Head", 16, 12, "About SKTools")
-        SKT.UI.Text(page, "Body", 16, 48,
-            "SKTools for Elder Scrolls Online\n" ..
-            "Version " .. SKT.version .. "\n" ..
-            "Created by " .. SKT.author .. "\n\n" ..
-            "Commands:\n" ..
-            "  /sktools          - open or close this window\n" ..
-            "  /sktools unlock   - unlock the resource and skill bars to move them\n" ..
-            "  /sktools lock     - lock them")
+        local L = SKT.UI.Column(page, 16, 568)
+        L:Header("SKTools for Elder Scrolls Online")
+        L:Text("Version " .. SKT.version .. "\nCreated by " .. SKT.author)
+        L:Header("Commands")
+        L:Text("/sktools  -  open or close this window\n" ..
+               "/sktools unlock  -  unlock every element\n" ..
+               "/sktools lock  -  lock every element\n" ..
+               "/rl  or  /reload  -  reload the UI")
     end,
 })

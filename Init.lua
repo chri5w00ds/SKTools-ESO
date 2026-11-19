@@ -13,16 +13,19 @@ local function OnAddOnLoaded(_, addonName)
         if mod.OnLoad then mod:OnLoad(SKT.db[mod.key] or SKT.db) end
     end
 
+    -- every element follows the one lock
+    for _, m in ipairs(SKT:Movables()) do
+        if m.db.locked ~= SKT.db.locked then
+            m.db.locked = SKT.db.locked
+            m:ApplyLock()
+        end
+    end
+
     SLASH_COMMANDS["/sktools"] = function(arg)
         arg = zo_strlower(zo_strtrim(arg or ""))
         if arg == "unlock" or arg == "lock" then
-            for _, m in ipairs({ SKT.Resources, SKT.Skills }) do
-                if m and m.db then
-                    m.db.locked = (arg == "lock")
-                    m:ApplyLock()
-                end
-            end
-            SKT:Print("Resource bars and skill bars " .. arg .. "ed.")
+            SKT:SetLocked(arg == "lock")
+            SKT:Print("Elements " .. arg .. "ed.")
         else
             SKT:ToggleWindow()
         end
@@ -30,3 +33,8 @@ local function OnAddOnLoaded(_, addonName)
 end
 
 EVENT_MANAGER:RegisterForEvent(SKT.name, EVENT_ADD_ON_LOADED, OnAddOnLoaded)
+
+-- /rl and /reload: reload the UI (registered as soon as this file loads, so nothing earlier can stop it)
+local function Reload() ReloadUI("ingame") end
+SLASH_COMMANDS["/rl"] = Reload
+SLASH_COMMANDS["/reload"] = Reload

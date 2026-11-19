@@ -9,43 +9,41 @@ SKT:RegisterModule({
     order = 1,
 
     BuildTab = function(self, page)
-        SKT.UI.Header(page, "Head", 16, 12, "General")
-
-        local modeText = (SKT.profileMode == "character")
-            and "Current profile: this character only."
-            or  "Current profile: account-wide (shared by all characters)."
-        SKT.UI.Text(page, "Mode", 16, 48, modeText)
-
-        SKT.UI.Checkbox(page, "CharProfile", 16, 84, "Use a character-specific profile",
-            function() return SKT.meta.useCharacterProfile end,
-            function(checked)
-                SKT:SetCharacterProfile(checked)
-                SKT:Print("Profile change takes effect after /reloadui.")
-            end,
-            "Off: settings apply to every character on this account.\nOn: this character gets its own settings.")
-
-        SKT.UI.Button(page, "Reload", 16, 124, "Reload UI", 140, function() ReloadUI("ingame") end)
-
-        -- snap to grid, for every element SKTools draws
+        local L = SKT.UI.Column(page, 16, 268)
+        local R = SKT.UI.Column(page, 316, 268)
         local function relayoutAll()
             if SKT.Resources and SKT.Resources.root then SKT.Resources:ApplyLayout() end
             if SKT.Skills and SKT.Skills.root then SKT.Skills:Layout(); SKT.Skills:Refresh() end
             SKT.Grid:Update(true)
         end
-        SKT.UI.Header(page, "HeadGrid", 16, 180, "Moving elements")
-        SKT.UI.Checkbox(page, "Snap", 16, 216, "Snap to grid",
+
+        L:Header("Elements")
+        SKT.lockBox = L:Check("Lock all elements",
+            function() return SKT.db.locked ~= false end,
+            function(v) SKT:SetLocked(v) end,
+            "Untick to move and size every element.\nAlso /sktools lock and /sktools unlock.")
+        L:Check("Snap to grid",
             function() return SKT.db.snap ~= false end,
-            function(v) SKT.db.snap = v; relayoutAll() end,
-            "A moved element snaps to the grid shown while unlocked.\nSizes are taken in whole grid boxes.")
-        SKT.UI.Slider(page, "Grid", 16, 248, 260, "Grid size", 2, 32, 1,
+            function(v) SKT.db.snap = v; relayoutAll() end)
+        L:Slider("Grid size", 2, 32, 1,
             function() return SKT.db.grid or 8 end,
             function(v) SKT.db.grid = v; relayoutAll() end,
             function(v) return v .. " px" end)
-        SKT.UI.Button(page, "Unlock", 16, 304, "Unlock elements", 180, function()
-            SLASH_COMMANDS["/sktools"]("unlock")
-        end)
-        SKT.UI.Button(page, "Lock", 206, 304, "Lock elements", 160, function()
-            SLASH_COMMANDS["/sktools"]("lock")
-        end)
+
+        L:Header("Profile")
+        L:Check("Character-specific settings",
+            function() return SKT.meta.useCharacterProfile end,
+            function(checked)
+                SKT:SetCharacterProfile(checked)
+                SKT:Print("Profile change takes effect after /reloadui.")
+            end,
+            "Off: every character shares the same settings.\nOn: this character has its own. Takes effect after a reload.")
+        L:Button("Reload UI", 140, function() ReloadUI("ingame") end)
+
+        R:Header("Features")
+        R:Check("Stamina tick",
+            function() return SKT.Ticks and SKT.Ticks.db and SKT.Ticks.db.enabled end,
+            function(v) if SKT.Ticks and SKT.Ticks.db then SKT.Ticks.db.enabled = v end end,
+            "A spark sweeping across your stamina bar to the next regeneration tick.")
     end,
 })

@@ -44,10 +44,64 @@ local function Tooltip(control, text)
     control:SetHandler("OnMouseExit", function() ClearTooltip(InformationTooltip) end)
 end
 
-function SKT.UI.Header(parent, name, x, y, text)
-    local lbl = MakeLabel(parent:GetName() .. name, parent, text, "ZoFontWinH3", SKT.colors.title)
+-- A section heading: gold capitals with a bronze line under them (as wide as width).
+function SKT.UI.Header(parent, name, x, y, text, width)
+    local lbl = MakeLabel(parent:GetName() .. name, parent, zo_strupper(text or ""),
+        "$(BOLD_FONT)|15|soft-shadow-thin", SKT.colors.title)
     lbl:SetAnchor(TOPLEFT, parent, TOPLEFT, x, y)
+    local line = WM:CreateControl(parent:GetName() .. name .. "Line", parent, CT_TEXTURE)
+    line:SetColor(SKT.col(SKT.colors.bronze))
+    line:SetAnchor(TOPLEFT, parent, TOPLEFT, x, y + 22)
+    line:SetDimensions(width or 270, 1)
     return lbl
+end
+
+-- A column of controls laid out top to bottom, each section under a heading.
+--   local c = SKT.UI.Column(page, x, width)
+--   c:Header("Size"); c:Check(...); c:Slider(...); c:Button(...); c:Space(8)
+-- c.y is where the next control goes (for custom controls: place at c.y, then c:Space(height)).
+function SKT.UI.Column(page, x, width)
+    local c = { page = page, x = x, w = width or 270, y = 14, n = 0 }
+    local function Id() c.n = c.n + 1; return "C" .. x .. "_" .. c.n end
+    function c:Header(text)
+        if self.y > 14 then self.y = self.y + 14 end
+        local h = SKT.UI.Header(page, Id(), self.x, self.y, text, self.w)
+        self.y = self.y + 32
+        return h
+    end
+    function c:Check(text, get, set, tip)
+        local cb = SKT.UI.Checkbox(page, Id(), self.x, self.y, text, get, set, tip)
+        self.y = self.y + 26
+        return cb
+    end
+    function c:Slider(text, minV, maxV, step, get, set, fmt)
+        local sl = SKT.UI.Slider(page, Id(), self.x, self.y, self.w, text, minV, maxV, step, get, set, fmt)
+        self.y = self.y + 44
+        return sl
+    end
+    function c:Button(text, w, fn)
+        local b = SKT.UI.Button(page, Id(), self.x, self.y, text, w or 180, fn)
+        self.y = self.y + 34
+        return b
+    end
+    -- buttons side by side: { { text, width, fn }, ... }
+    function c:Buttons(list)
+        local bx, out = self.x, {}
+        for _, b in ipairs(list) do
+            out[#out + 1] = SKT.UI.Button(page, Id(), bx, self.y, b[1], b[2], b[3])
+            bx = bx + b[2] + 8
+        end
+        self.y = self.y + 34
+        return unpack(out)
+    end
+    function c:Text(text)
+        local t = SKT.UI.Text(page, Id(), self.x, self.y, text, self.w)
+        self.y = self.y + math.max(20, (t:GetTextHeight() or 20)) + 6
+        return t
+    end
+    function c:Space(n) self.y = self.y + (n or 8) end
+    function c:Id() return Id() end
+    return c
 end
 
 function SKT.UI.Text(parent, name, x, y, text, width)
@@ -107,6 +161,49 @@ function SKT.UI.Slider(parent, name, x, y, width, text, minV, maxV, step, getFn,
     return s
 end
 
+-- Sounds to choose from (only those this client has are offered).
+SKT.SOUND_CHOICES = {
+    { "Click", "DEFAULT_CLICK" },
+    { "Tick",  "BOOK_PAGE_TURN" },
+    { "Ding",  "QUEST_FOCUSED" },
+    { "Chime", "NEW_NOTIFICATION" },
+    { "Bell",  "ACHIEVEMENT_AWARDED" },
+    { "Alarm", "DUEL_START" },
+    { "Horn",  "AVA_GATE_OPENED" },
+}
+
+function SKT.PlaySoundKey(key)
+    local snd = SOUNDS and SOUNDS[key or ""]
+    if snd then PlaySound(snd) end
+end
+
+-- A sound picker: buttons two to a row, the chosen one marked with ». Pressing one plays it.
+-- Returns the height used.
+function SKT.UI.SoundPicker(parent, name, x, y, getFn, setFn)
+    local buttons = {}
+    local function Mark()
+        for _, b in ipairs(buttons) do
+            b.btn:SetText((getFn() == b.key and "» " or "") .. b.label)
+        end
+    end
+    local n = 0
+    for _, c in ipairs(SKT.SOUND_CHOICES) do
+        if SOUNDS and SOUNDS[c[2]] then
+            local i = n
+            n = n + 1
+            local btn = SKT.UI.Button(parent, name .. c[2], x + (i % 2) * 132, y + math.floor(i / 2) * 32,
+                c[1], 128, function()
+                    setFn(c[2])
+                    SKT.PlaySoundKey(c[2])
+                    Mark()
+                end)
+            buttons[#buttons + 1] = { btn = btn, key = c[2], label = c[1] }
+        end
+    end
+    Mark()
+    return math.ceil(n / 2) * 32
+end
+
 -- Standard ESO button.
 function SKT.UI.Button(parent, name, x, y, text, width, onClick)
     local btn = WM:CreateControlFromVirtual(parent:GetName() .. name, parent, "ZO_DefaultButton")
@@ -120,8 +217,11 @@ end
 ---------------------------------------------------------------------------
 -- Main window
 ---------------------------------------------------------------------------
+local BEE = "SKTools-ESO/Media/Logo.dds"
+
 function SKT:BuildWindow()
     if self.window then return end
+    local C = self.colors
 
     local win = WM:CreateTopLevelWindow("SKToolsESO_Window")
     win:SetDimensions(WIN_W, WIN_H)
@@ -141,33 +241,65 @@ function SKT:BuildWindow()
         self.db.window.x, self.db.window.y = c:GetLeft(), c:GetTop()
     end)
 
-    local bg = MakeBackdrop("$(parent)BG", win, self.colors.bg, self.colors.edge, 2)
+    -- the navy ground and a thin silver frame with rounded corners
+    local bg = WM:CreateControl("$(parent)BG", win, CT_TEXTURE)
     bg:SetAnchorFill(win)
+    bg:SetColor(col(C.bg))
+    self.windowRing = SKT.Draw.NewRing(win, 9)
+    SKT.Draw.DrawRing(self.windowRing, win, 0, 0, WIN_W, WIN_H, function(f)
+        local t, b = { 0.70, 0.71, 0.76 }, { 0.48, 0.49, 0.54 }
+        return t[1] + (b[1] - t[1]) * f, t[2] + (b[2] - t[2]) * f, t[3] + (b[3] - t[3]) * f
+    end)
 
-    local title = MakeLabel("$(parent)Title", win, "SKTools", "ZoFontWinH1", self.colors.title)
-    title:SetAnchor(TOPLEFT, win, TOPLEFT, 18, 10)
+    -- the bee and the name
+    local bee = WM:CreateControl("$(parent)Bee", win, CT_TEXTURE)
+    bee:SetTexture(BEE)
+    bee:SetDimensions(44, 44)
+    bee:SetAnchor(TOPLEFT, win, TOPLEFT, 12, 6)
 
-    local sub = MakeLabel("$(parent)Sub", win, "Elder Scrolls Online  ·  by " .. self.author,
-        "ZoFontGameSmall", self.colors.muted)
-    sub:SetAnchor(TOPLEFT, title, BOTTOMLEFT, 2, -2)
+    local title = MakeLabel("$(parent)Title", win, "SKTools", "$(BOLD_FONT)|26|soft-shadow-thick", C.title)
+    title:SetAnchor(LEFT, bee, RIGHT, 8, 0)
 
-    local ver = MakeLabel("$(parent)Ver", win, "v" .. self.version, "ZoFontGameSmall", self.colors.muted)
-    ver:SetAnchor(TOPRIGHT, win, TOPRIGHT, -44, 16)
+    local ver = MakeLabel("$(parent)Ver", win, "v" .. self.version, "ZoFontGameSmall", C.muted)
+    ver:SetAnchor(TOPRIGHT, win, TOPRIGHT, -44, 20)
 
     local close = WM:CreateControlFromVirtual("$(parent)Close", win, "ZO_CloseButton")
-    close:SetAnchor(TOPRIGHT, win, TOPRIGHT, -10, 12)
+    close:SetAnchor(TOPRIGHT, win, TOPRIGHT, -12, 16)
     close:SetHandler("OnClicked", function() self:HideWindow() end)
 
-    local tabCol = MakeBackdrop("$(parent)Tabs", win, self.colors.panel, self.colors.edge, 1)
-    tabCol:SetAnchor(TOPLEFT, win, TOPLEFT, 12, HEADER_H)
+    -- the bronze divider with a diamond in its middle
+    local div = WM:CreateControl("$(parent)Div", win, CT_TEXTURE)
+    div:SetColor(col(C.bronze))
+    div:SetAnchor(TOPLEFT, win, TOPLEFT, 16, HEADER_H)
+    div:SetDimensions(WIN_W - 32, 1)
+    local d1 = WM:CreateControl("$(parent)Diamond", win, CT_TEXTURE)
+    d1:SetColor(col(C.gold))
+    d1:SetDimensions(10, 10)
+    d1:SetAnchor(CENTER, win, TOPLEFT, WIN_W / 2, HEADER_H)
+    d1:SetTextureRotation(math.pi / 4)
+    local d2 = WM:CreateControl("$(parent)DiamondIn", win, CT_TEXTURE)
+    d2:SetColor(col(C.bg))
+    d2:SetDimensions(7, 7)
+    d2:SetAnchor(CENTER, win, TOPLEFT, WIN_W / 2, HEADER_H)
+    d2:SetTextureRotation(math.pi / 4)
+    d2:SetDrawLevel(2)
+
+    -- the tab list and the page, each on a slightly lighter panel
+    local tabCol = MakeBackdrop("$(parent)Tabs", win, C.panelBg, C.panelEdge, 1)
+    tabCol:SetAnchor(TOPLEFT, win, TOPLEFT, 12, HEADER_H + 12)
     tabCol:SetAnchor(BOTTOMLEFT, win, BOTTOMLEFT, 12, -12)
     tabCol:SetWidth(TAB_W + 8)
 
-    local content = MakeBackdrop("$(parent)Content", win, self.colors.panel, self.colors.edge, 1)
+    local content = MakeBackdrop("$(parent)Content", win, C.panelBg, C.panelEdge, 1)
     content:SetAnchor(TOPLEFT, tabCol, TOPRIGHT, 8, 0)
     content:SetAnchor(BOTTOMRIGHT, win, BOTTOMRIGHT, -12, -12)
 
     self.window, self.content, self.tabs, self.pages = win, content, {}, {}
+
+    -- anything that shows whether the window is open (the minimap's bee) follows it
+    local function Changed() if SKT.Minimap and SKT.Minimap.FaceBee then SKT.Minimap:FaceBee() end end
+    win:SetHandler("OnEffectivelyShown", Changed)
+    win:SetHandler("OnEffectivelyHidden", Changed)
 
     for i, mod in ipairs(self.modules) do
         self:CreateTab(tabCol, mod, i)
@@ -176,28 +308,25 @@ function SKT:BuildWindow()
     self:SelectTab(self:GetModule(self.db.lastTab) and self.db.lastTab or self.modules[1].key)
 end
 
+-- a tab: plain text on the panel; the chosen one gold with a › before it
 function SKT:CreateTab(tabCol, mod, index)
     local tab = WM:CreateControl("SKToolsESO_Tab" .. mod.key, tabCol, CT_BUTTON)
     tab:SetDimensions(TAB_W, TAB_H)
-    tab:SetAnchor(TOPLEFT, tabCol, TOPLEFT, 4, 4 + (index - 1) * (TAB_H + 4))
+    tab:SetAnchor(TOPLEFT, tabCol, TOPLEFT, 4, 8 + (index - 1) * TAB_H)
     tab:SetMouseEnabled(true)
 
-    local bg = MakeBackdrop("$(parent)BG", tab, self.colors.tabIdle, self.colors.edge, 1)
-    bg:SetAnchorFill(tab)
-
-    -- Active tab is marked by a shape (arrow) as well as colour.
-    local marker = MakeLabel("$(parent)Marker", tab, "›", "ZoFontWinH3", self.colors.title)
-    marker:SetAnchor(LEFT, tab, LEFT, 6, 0)
+    local marker = MakeLabel("$(parent)Marker", tab, "›", "$(BOLD_FONT)|18|soft-shadow-thin", self.colors.title)
+    marker:SetAnchor(LEFT, tab, LEFT, 8, -1)
     marker:SetHidden(true)
 
-    local lbl = MakeLabel("$(parent)Label", tab, mod.title, "ZoFontGame", self.colors.text)
-    lbl:SetAnchor(LEFT, tab, LEFT, 20, 0)
+    local lbl = MakeLabel("$(parent)Label", tab, mod.title, "$(MEDIUM_FONT)|16|soft-shadow-thin", self.colors.text)
+    lbl:SetAnchor(LEFT, tab, LEFT, 22, 0)
 
     tab:SetHandler("OnClicked", function() self:SelectTab(mod.key) end)
-    tab:SetHandler("OnMouseEnter", function() if self.activeTab ~= mod.key then lbl:SetColor(col(self.colors.title)) end end)
+    tab:SetHandler("OnMouseEnter", function() if self.activeTab ~= mod.key then lbl:SetColor(col(self.colors.gold)) end end)
     tab:SetHandler("OnMouseExit",  function() if self.activeTab ~= mod.key then lbl:SetColor(col(self.colors.text)) end end)
 
-    self.tabs[mod.key] = { button = tab, bg = bg, marker = marker, label = lbl }
+    self.tabs[mod.key] = { button = tab, marker = marker, label = lbl }
 end
 
 function SKT:SelectTab(key)
@@ -213,7 +342,6 @@ function SKT:SelectTab(key)
 
     for k, t in pairs(self.tabs) do
         local active = (k == key)
-        t.bg:SetCenterColor(col(active and self.colors.tabActive or self.colors.tabIdle))
         t.marker:SetHidden(not active)
         t.label:SetColor(col(active and self.colors.title or self.colors.text))
         if self.pages[k] then self.pages[k]:SetHidden(not active) end

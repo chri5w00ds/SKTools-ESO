@@ -44,8 +44,8 @@ function G.Fmt(v)
 end
 
 local function AnyUnlocked()
-    for _, m in ipairs({ SKT.Resources, SKT.Skills }) do
-        if m and m.db and m.db.enabled and not m.db.locked then return true end
+    for _, m in ipairs(SKT:Movables()) do
+        if m.db.enabled and not m.db.locked then return true end
     end
     return false
 end
@@ -126,4 +126,30 @@ end
 function G.Rect(ctrl)
     local cx, cy = GuiRoot:GetWidth() / 2, GuiRoot:GetHeight() / 2
     return ctrl:GetLeft() - cx, ctrl:GetTop() - cy, ctrl:GetRight() - cx, ctrl:GetBottom() - cy
+end
+
+-- An element's label while unlocked: a thin gold outline round it and its name in gold above.
+-- Returns an object with :SetHidden(hidden).
+function G.Tag(ctrl, text)
+    local box = WM:CreateControl(nil, ctrl, CT_BACKDROP)
+    box:SetCenterColor(0.95, 0.76, 0.31, 0.08)
+    box:SetEdgeColor(0.95, 0.76, 0.31, 0.9)
+    box:SetEdgeTexture("", 1, 1, 1, 0)
+    box:SetAnchor(TOPLEFT, ctrl, TOPLEFT, -4, -4)
+    box:SetAnchor(BOTTOMRIGHT, ctrl, BOTTOMRIGHT, 4, 4)
+    box:SetDrawLevel(20)
+    box:SetHidden(true)
+    local label = WM:CreateControl(nil, ctrl, CT_LABEL)
+    label:SetFont("$(BOLD_FONT)|14|soft-shadow-thick")
+    label:SetColor(0.95, 0.76, 0.31, 1)
+    label:SetText(text)
+    label:SetAnchor(BOTTOMLEFT, ctrl, TOPLEFT, -4, -6)
+    label:SetDrawLevel(20)
+    label:SetHidden(true)
+    local tag = { box = box, label = label }
+    function tag:SetHidden(hidden)
+        self.box:SetHidden(hidden)
+        self.label:SetHidden(hidden)
+    end
+    return tag
 end

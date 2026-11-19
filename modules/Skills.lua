@@ -24,6 +24,13 @@ local EM  = EVENT_MANAGER
 local NS = "SKToolsESO_Skills"
 local S = {}
 SKT.Skills = S
+
+-- a game function called safely: its results, or nothing if it isn't there or fails
+local function Call(fn, ...)
+    if not fn then return nil end
+    local ok, a, b, c, d = pcall(fn, ...)
+    if ok then return a, b, c, d end
+end
 S.timers = {}       -- abilityId -> when its effect ends (GetFrameTimeSeconds)
 S.slotTimers = {}   -- "bar:slot" -> { ends, id }: a delayed skill's timer, kept on its slot
 S.companions = {}   -- abilityIds that stood in for a delayed skill (Budding Seeds' "bloom now")
@@ -37,6 +44,8 @@ local DELAYED = {
     ["Healing Seed"]      = { secs = 6 },
     ["Budding Seeds"]     = { secs = 6, reuseEnds = true },
     ["Corrupting Pollen"] = { secs = 6 },
+    -- two detonations, 3 s apart: the whole 6 s (the game's duration covers only the first)
+    ["Subterranean Assault"] = { secs = 6, fixed = true },
 }
 local function Delayed(id)
     local ok, name = pcall(GetAbilityName, id)
@@ -113,9 +122,31 @@ local function MakeIcon(parent)
     end
 
     f.num = WM:CreateControl(nil, f, CT_LABEL)
-    -- the number fills the icon and is centred both ways within it
     f.num:SetColor(1, 1, 1, 1)
     f.num:SetDrawLevel(7)
+
+    -- the game's tooltip for the skill, while the cursor is over it
+    f:SetHandler("OnMouseEnter", function(c)
+        if not c.abilityId then return end
+        InitializeTooltip(AbilityTooltip, c, BOTTOM, 0, -6, TOP)
+        -- scribed skills: the scribing tooltip with its scripts, else the skill it makes
+        if c.craftedId and AbilityTooltip.SetCraftedAbility then
+            local a, b, d = Call(GetCraftedAbilityActiveScriptIds, c.craftedId)
+            if pcall(AbilityTooltip.SetCraftedAbility, AbilityTooltip, c.craftedId, a, b, d) then return end
+        end
+        AbilityTooltip:SetAbilityId(c.abilityId)
+    end)
+    f:SetHandler("OnMouseExit", function() ClearTooltip(AbilityTooltip) end)
+
+    -- moving skills: drag one to another slot (or drop one from the skills window), as on ESO's bar
+    f:SetHandler("OnDragStart", function(c) S:Pickup(c) end)
+    f:SetHandler("OnReceiveDrag", function(c) S:Place(c) end)
+    f:SetHandler("OnMouseUp", function(c, button, upInside)
+        if upInside and button == MOUSE_BUTTON_INDEX_LEFT and GetCursorContentType
+           and GetCursorContentType() ~= MOUSE_CONTENT_EMPTY then
+            S:Place(c)
+        end
+    end)
     return f
 end
 
@@ -183,13 +214,40 @@ end
 ---------------------------------------------------------------------------
 -- Slot data
 ---------------------------------------------------------------------------
-local function Call(fn, ...)
-    if not fn then return nil end
-    local ok, a, b, c, d = pcall(fn, ...)
-    if ok then return a, b, c, d end
+
+-- a slot's real ability: scribed (crafted) skills hold a scribing id, turned into the skill it makes
+local function SlotAbility(slot, cat)
+    local id = Call(GetSlotBoundId, slot, cat)
+    if not id or id == 0 then return nil, nil end
+    local craftedId
+    if ACTION_TYPE_CRAFTED_ABILITY and Call(GetSlotType, slot, cat) == ACTION_TYPE_CRAFTED_ABILITY then
+        craftedId = id
+        local real = Call(GetAbilityIdForCraftedAbilityId, id)
+        if real and real ~= 0 then id = real end
+    end
+    return id, craftedId
 end
 
-local function SlotCost(slot, cat)
+-- the ultimate's cost, asked a few ways (the slot, then the ability)
+local function UltCost(slot, cat, abilityId)
+    local ULT = COMBAT_MECHANIC_FLAGS_ULTIMATE
+    local cost = Call(GetSlotAbilityCost, slot, ULT, cat)
+    if type(cost) ~= "number" or cost <= 0 then
+        local c2, mech = Call(GetSlotAbilityCost, slot, cat)
+        if type(c2) == "number" and c2 > 0 and (mech == nil or mech == ULT) then cost = c2 end
+    end
+    if (type(cost) ~= "number" or cost <= 0) and abilityId then
+        cost = Call(GetAbilityCost, abilityId, ULT, nil, "player") or Call(GetAbilityCost, abilityId, ULT)
+    end
+    if type(cost) == "number" and cost > 0 then return cost end
+end
+
+local function SlotCost(slot, cat, abilityId)
+    if slot == ULT then
+        local cost = UltCost(slot, cat, abilityId)
+        if cost then return cost, COMBAT_MECHANIC_FLAGS_ULTIMATE, "ultimate" end
+        return nil
+    end
     for _, m in ipairs(MECH) do
         if m[1] then
             local cost = Call(GetSlotAbilityCost, slot, m[1], cat)
@@ -219,29 +277,16 @@ function S:Build()
         end,
         move = function(dx, dy)
             local G = SKT.Grid
-            local x, y = drag.x + dx, drag.y + dy
-            local attach = false
-            local res = SKT.Resources and SKT.Resources.root
-            if res and SKT.Resources.db.enabled then
-                local rl, rt, rr = G.Rect(res)
-                local rcx = rl + ((rr - rl) + G.Trim()) / 2
-                local near = math.max(4, G.Size())
-                attach = math.abs(x - rcx) <= near and math.abs(y - rt) <= near
-            end
-            db.attach = attach
-            db.x, db.y = x, y
+            db.x, db.y = drag.x + dx, drag.y + dy
             self:Layout()
         end,
         stop = function()
             local G = SKT.Grid
-            if not db.attach then
-                local s = D.OnPx(G.Boxes(db.size))
-                local fullW = 6 * s + D.OnPx(G.Boxes(db.gap, true))
-                db.x = G.SnapOne(db.x - fullW / 2) + fullW / 2
-                db.y = G.SnapOne(db.y)
-            end
+            local s = D.OnPx(G.Boxes(db.size))
+            local fullW = 6 * s + self:Gap()
+            db.x = G.SnapOne(db.x - fullW / 2) + fullW / 2
+            db.y = G.SnapOne(db.y)
             self:Layout()
-            if self.attachBox then ZO_CheckButton_SetCheckState(self.attachBox, db.attach) end
         end,
     })
     self.root = root
@@ -262,17 +307,8 @@ function S:Build()
         self.groups[g] = grp
     end
 
-    local mover = WM:CreateControl("$(parent)Mover", root, CT_BACKDROP)
-    mover:SetCenterColor(0.16, 0.22, 0.38, 0.35)
-    mover:SetEdgeColor(SKT.col(SKT.colors.title))
-    mover:SetEdgeTexture("", 1, 1, 1, 0)
-    mover:SetAnchor(TOPLEFT, root, TOPLEFT, -6, -22)
-    mover:SetAnchor(BOTTOMRIGHT, root, BOTTOMRIGHT, 6, 6)
-    mover:SetDrawLevel(10)
-    local mt = SKT.MakeLabel("$(parent)Text", mover, "SKTools: skills (front | back)", "ZoFontGameSmall",
-        SKT.colors.title)
-    mt:SetAnchor(TOP, mover, TOP, 0, 3)
-    self.mover = mover
+    -- its name and outline while unlocked
+    self.mover = SKT.Grid.Tag(root, "Skill bars")
 
     self.fragment = ZO_HUDFadeSceneFragment:New(root)
 end
@@ -286,7 +322,7 @@ function S:Layout()
     -- frame lines on grid lines; with no gap the two bars share the line between them)
     local trim = G.Trim()
     local s = D.OnPx(G.Boxes(db.size))
-    local gap = D.OnPx(G.Boxes(db.gap, true))
+    local gap = self:Gap()
     local gw, gh = 3 * s - trim, 2 * s - trim
     local fullW = 6 * s + gap
 
@@ -310,27 +346,25 @@ function S:Layout()
         D.DrawRing(grp.ring, grp, 0, 0, gw, gh, D.White)
     end
 
+    self:LayoutUltMeter(3 * s, gap, gh)
     self.root:SetDimensions(fullW - trim, gh)
     self.root:ClearAnchors()
     local res = SKT.Resources and SKT.Resources.root
-    if db.attach and res then
-        -- a pixel above the resource bars: their frames share a line
-        self.root:SetAnchor(BOTTOM, res, TOP, 0, -px)
-    else
-        -- placed by its bottom (centred on x), from the middle of the screen; while snapping the left
-        -- edge and the bottom frame line on grid lines
-        local left = G.SnapOne((db.x or 0) - fullW / 2)
-        local bottom = G.SnapOne(db.y or 135) - trim
-        self.root:SetAnchor(BOTTOMLEFT, GuiRoot, CENTER, D.OnPx(left), D.OnPx(bottom))
-    end
+    -- placed by its bottom (centred on x), from the middle of the screen; while snapping the left
+    -- edge and the bottom frame line on grid lines
+    local left = G.SnapOne((db.x or 0) - fullW / 2)
+    local bottom = G.SnapOne(db.y or 135) - trim
+    self.root:SetAnchor(BOTTOMLEFT, GuiRoot, CENTER, D.OnPx(left), D.OnPx(bottom))
 end
 
 -- one icon's look: texture, dimmed, cost, cooldown
 function S:PaintIcon(f, slot, cat, activeBar)
     local tex = Call(GetSlotTexture, slot, cat)
     local empty = (tex == nil or tex == "")
-    f.abilityId = (not empty) and Call(GetSlotBoundId, slot, cat) or nil
+    f.abilityId, f.craftedId = nil, nil
+    if not empty then f.abilityId, f.craftedId = SlotAbility(slot, cat) end
     f.key = Key(cat, slot)
+    f.slot, f.cat = slot, cat
     -- the slot shows another ability while its delayed skill runs (Budding Seeds' "bloom now"):
     -- remember it, so its effects never start a timer of their own
     local st = self.slotTimers[f.key]
@@ -340,7 +374,7 @@ function S:PaintIcon(f, slot, cat, activeBar)
 
     local dim = self.db.dimInactive and not activeBar
     local cost, mech, key
-    if not empty then cost, mech, key = SlotCost(slot, cat) end
+    if not empty then cost, mech, key = SlotCost(slot, cat, f.abilityId) end
     local power = mech and GetUnitPower("player", mech) or 0
     local short = cost and power < cost
 
@@ -354,6 +388,12 @@ function S:PaintIcon(f, slot, cat, activeBar)
         FillResourceFrame(f, power / cost, ResColor(key))
     else
         HideResourceFrame(f)
+    end
+
+    -- the ultimates: how close you are to the cost, in percent (until it's ready)
+    f.ultPct = nil
+    if self.db.ultPercent and key == "ultimate" and cost and cost > 0 and power < cost then
+        f.ultPct = math.floor(power / cost * 100)
     end
 
     -- cooldown: the sweep and its number (the global cooldown's number can be switched off)
@@ -389,6 +429,7 @@ end
 
 function S:Refresh()
     if not self.groups then return end
+    self:UpdateUltMeter()
     local active = Call(GetActiveHotbarCategory) or HOTBAR_CATEGORY_PRIMARY
     for _, grp in ipairs(self.groups) do
         for i, pos in ipairs(LAYOUT) do
@@ -423,6 +464,8 @@ function S:Tick()
             elseif left > 0 and db.showNumbers and (not f.cdGlobal or db.gcdNumbers) then
                 any = true
                 f.num:SetText(Secs(left / 1000))
+            elseif f.ultPct then
+                f.num:SetText(f.ultPct .. "%")
             else
                 f.num:SetText("")
                 if left > 0 then any = true end
@@ -452,9 +495,97 @@ function S:UpdateIdle()
     self.body:SetAlpha(show and 1 or 0)
 end
 
+-- the gap between the bars; with the ultimate meter in it, at least a grid box
+function S:Gap()
+    local G = SKT.Grid
+    local g = G.Boxes(self.db.gap, true)
+    if self.db.ultMeter then g = math.max(g, G.On() and G.Size() or 8) end
+    return D.OnPx(g)
+end
+
+-- the ultimate meter: a thin bar standing in the gap between the two halves, filling from the
+-- bottom with your ultimate out of the most you can hold (500)
+function S:LayoutUltMeter(x, gap, h)
+    local m = self.meter
+    if not m then
+        m = { track = D.Tex(self.body, 1), fill = D.Tex(self.body, 2), ring = D.NewRing(self.body, 9) }
+        self.meter = m
+    end
+    local px = D.Px()
+    local on = self.db.ultMeter and gap >= 4 * px
+    m.on = on
+    m.track:SetHidden(not on)
+    m.fill:SetHidden(not on)
+    if not on then
+        for _, t in ipairs(m.ring.edges) do t:SetHidden(true) end
+        for _, t in ipairs(m.ring.dots) do t:SetHidden(true) end
+        return
+    end
+    -- a pixel of air either side, so its frame doesn't touch the bars' frames
+    local mx, mw = x + 2 * px, math.max(px, gap - 4 * px)
+    m.x, m.w, m.h = mx, mw, h
+    m.track:ClearAnchors()
+    m.track:SetAnchor(TOPLEFT, self.body, TOPLEFT, mx, 0)
+    m.track:SetDimensions(mw, h)
+    D.Solid(m.track, 0, 0, 0, 0.6)
+    D.DrawRing(m.ring, self.body, mx, 0, mw, h, D.White)
+    self:UpdateUltMeter()
+end
+
+function S:UpdateUltMeter()
+    local m = self.meter
+    if not (m and m.on) then return end
+    local cur, max = GetUnitPower("player", COMBAT_MECHANIC_FLAGS_ULTIMATE)
+    max = (max and max > 0) and max or 500
+    local f = D.Clamp01((cur or 0) / max)
+    m.fill:ClearAnchors()
+    m.fill:SetAnchor(BOTTOMLEFT, self.body, TOPLEFT, m.x, m.h)
+    m.fill:SetDimensions(m.w, math.max(0.01, m.h * f))
+    m.fill:SetHidden(f <= 0)
+    local c = ULT_COLOR
+    D.VGrad(m.fill, math.min(1, c[1] * 1.15 + 0.12), math.min(1, c[2] * 1.15 + 0.12), math.min(1, c[3] * 1.15 + 0.12), 1,
+        c[1] * 0.55, c[2] * 0.55, c[3] * 0.55, 1)
+end
+
+-- moving skills: only on the bar you're on, out of combat (as ESO's own bar)
+local function BarCheck(c)
+    if not c.slot then return false end
+    if IsUnitInCombat("player") then return false end
+    if AreActionBarsLocked and AreActionBarsLocked() then return false end
+    if c.cat ~= (GetActiveHotbarCategory and GetActiveHotbarCategory()) then
+        SKT:Print("Swap to that bar to move its skills.")
+        return false
+    end
+    return true
+end
+
+local function Protected(fn, ...)
+    if CallSecureProtected then
+        local ok = pcall(CallSecureProtected, fn, ...)
+        if ok then return true end
+    end
+    local f = _G[fn]
+    return f and pcall(f, ...) or false
+end
+
+function S:Pickup(c)
+    if not c.abilityId or not BarCheck(c) then return end
+    ClearTooltip(AbilityTooltip)
+    Protected("PickupAction", c.slot)
+end
+
+function S:Place(c)
+    if not BarCheck(c) then return end
+    Protected("PlaceInActionBar", c.slot)
+end
+
 function S:ApplyLock()
     local locked = self.db.locked
     self.root:SetMouseEnabled(not locked)
+    -- the icons take the mouse (tooltips, moving skills) while locked; unlocked, the pane is dragged
+    for _, grp in ipairs(self.groups or {}) do
+        for _, f in ipairs(grp.icons) do f:SetMouseEnabled(locked) end
+    end
     self.mover:SetHidden(locked)
     self:UpdateIdle()
     SKT.Grid:Update()
@@ -495,7 +626,7 @@ end
 function S:RegisterEvents()
     local function Full() self:Refresh() end
     local n = 0
-    for _, ev in ipairs({
+    for _, ev in pairs({
         EVENT_ACTION_SLOTS_FULL_UPDATE, EVENT_ACTION_SLOT_UPDATED, EVENT_ACTION_SLOTS_ALL_HOTBARS_UPDATED,
         EVENT_ACTION_SLOTS_ACTIVE_HOTBAR_UPDATED, EVENT_HOTBAR_SLOT_UPDATED, EVENT_ACTIVE_WEAPON_PAIR_CHANGED,
         EVENT_ACTION_UPDATE_COOLDOWNS, EVENT_SKILLS_FULL_UPDATE, EVENT_PLAYER_ACTIVATED,
@@ -515,7 +646,7 @@ function S:RegisterEvents()
     -- skill timers: started when you use a slotted skill, from the skill's duration ...
     EM:RegisterForEvent(NS .. "Used", EVENT_ACTION_SLOT_ABILITY_USED, function(_, slot)
         local cat = Call(GetActiveHotbarCategory) or HOTBAR_CATEGORY_PRIMARY
-        local id = Call(GetSlotBoundId, slot, cat)
+        local id = SlotAbility(slot, cat)
         if not id or id == 0 then return end
         local now = GetFrameTimeSeconds()
         local key = Key(cat, slot)
@@ -531,7 +662,7 @@ function S:RegisterEvents()
         local d = Delayed(id)
         if d then
             local ms = Call(GetAbilityDuration, id, nil, "player") or Call(GetAbilityDuration, id)
-            local secs = (type(ms) == "number" and ms > 0) and (ms / 1000) or d.secs
+            local secs = (not d.fixed and type(ms) == "number" and ms > 0) and (ms / 1000) or d.secs
             self.slotTimers[key] = { ends = now + secs, id = id }
             self:Tick()
             return
@@ -576,8 +707,7 @@ SKT:RegisterModule({
     defaults = {
         enabled = true,
         locked  = true,
-        attach  = true,      -- sit on top of the resource bars, sharing their frame line
-        x = 0, y = 135,      -- when not attached: the pane's bottom centre from the middle of the screen
+        x = 0, y = 135,      -- the pane's bottom centre from the middle of the screen
         size = 40,
         gap  = 8,            -- between the front and back bar (one grid box)
         dimInactive = true,
@@ -586,6 +716,8 @@ SKT:RegisterModule({
         hideOutOfCombat = false,
         hideDefault = true,  -- ESO's own action bar hidden
         gcdNumbers  = false, -- countdown numbers on the global cooldown too
+        ultPercent  = true,  -- the ultimates: percent of their cost
+        ultMeter    = true,  -- the ultimate meter between the bars
         showTimers  = true,  -- time left on each skill's effect
         gcdAlpha    = 62,    -- sweep darkness (%) on the global cooldown
         cdAlpha     = 62,    -- sweep darkness (%) on real cooldowns
@@ -597,6 +729,14 @@ SKT:RegisterModule({
         if db.timerVersion ~= 1 then db.gcdNumbers, db.timerVersion = false, 1 end
         local NUM = { x = 0, y = 135, size = 40, gap = 8, gcdAlpha = 62, cdAlpha = 62 }
         for k, v in pairs(NUM) do if type(db[k]) ~= "number" then db[k] = v end end
+        -- the pane no longer sits on the resource bars: one that did keeps that place, on its own
+        if db.attach ~= false then
+            local rdb = SKT.Resources and SKT.Resources.db
+            if rdb then db.x, db.y = rdb.x or 0, rdb.y or 136 end
+            db.attach = false
+        end
+        -- always: no GCD numbers, shown in and out of combat, ESO's own action bar hidden
+        db.gcdNumbers, db.hideOutOfCombat, db.hideDefault = false, false, true
         S:Build()
         S:RegisterEvents()
         S:Layout()
@@ -606,64 +746,43 @@ SKT:RegisterModule({
     end,
 
     BuildTab = function(self, page, db)
-        local UI = SKT.UI
-        local L, RX, CW = 16, 316, 260
+        local L = SKT.UI.Column(page, 16, 268)
+        local R = SKT.UI.Column(page, 316, 268)
         local function relayout() S:Layout(); S:Refresh() end
-
-        UI.Header(page, "Head", L, 12, "Skill bars")
-        UI.Text(page, "Intro", L, 44,
-            "Front bar on the left, back bar on the right.\n" ..
-            "Each bar: top row 2, 4, Ultimate. Bottom row 1, 3, 5.", 560)
-
-        UI.Checkbox(page, "Enabled", L, 116, "Enable",
-            function() return db.enabled end,
-            function(v) db.enabled = v; S:ApplyEnabled() end)
-        UI.Checkbox(page, "Locked", L, 142, "Lock position",
-            function() return db.locked end,
-            function(v) db.locked = v; S:ApplyLock() end)
-        S.attachBox = UI.Checkbox(page, "Attach", L, 168, "Sit on top of the resource bars",
-            function() return db.attach end,
-            function(v) db.attach = v; relayout() end,
-            "Placed a pixel above the resource bars so the two frames share a line.\nDragging the pane near the top of the bars sets this; dragging it away clears it.")
-        UI.Checkbox(page, "Dim", L, 194, "Dim the bar you are not on",
-            function() return db.dimInactive end,
-            function(v) db.dimInactive = v; S:Refresh() end)
-        UI.Checkbox(page, "Timers", L, 324, "Skill timers",
-            function() return db.showTimers end,
-            function(v) db.showTimers = v; S:Tick() end,
-            "The time left on the buff, damage or heal over time each skill applied,\non both bars, so you can see when to recast. Shown in the middle of the icon.")
-        UI.Checkbox(page, "Numbers", L, 220, "Cooldown numbers",
-            function() return db.showNumbers end,
-            function(v) db.showNumbers = v; S:Refresh() end)
-        UI.Checkbox(page, "GcdNumbers", L + 170, 220, "GCD too",
-            function() return db.gcdNumbers end,
-            function(v) db.gcdNumbers = v; S:Refresh() end)
-        UI.Checkbox(page, "Cost", L, 246, "Resource frame when short of the cost",
-            function() return db.showCost end,
-            function(v) db.showCost = v; S:Refresh() end,
-            "The icon greys and a thin frame in the resource's colour fills clockwise\nfrom 12 o'clock as you build up to the cost (ultimate too).")
-        UI.Checkbox(page, "Combat", L, 272, "Hide out of combat",
-            function() return db.hideOutOfCombat end,
-            function(v) db.hideOutOfCombat = v; S:UpdateIdle() end)
-        UI.Checkbox(page, "HideDefault", L, 298, "Hide ESO's own action bar",
-            function() return db.hideDefault end,
-            function(v) db.hideDefault = v; S:ApplyDefaultBar() end,
-            "Hides the built-in action bar (skills, ultimate and quickslot).\nYour keybinds keep working.")
-
-        UI.Slider(page, "Size", RX, 116, CW, "Icon size", 24, 64, 1,
-            function() return db.size end, function(v) db.size = v; relayout() end, SKT.Grid.Fmt)
-        UI.Slider(page, "Gap", RX, 160, CW, "Gap between front and back bar", 0, 24, 1,
-            function() return db.gap end, function(v) db.gap = v; relayout() end, SKT.Grid.Fmt)
         local function Pct(v) return v <= 0 and "hidden" or (v .. "%") end
-        UI.Slider(page, "GcdAlpha", RX, 260, CW, "GCD sweep opacity", 0, 100, 5,
-            function() return db.gcdAlpha end, function(v) db.gcdAlpha = v; S:Refresh() end, Pct)
-        UI.Slider(page, "CdAlpha", RX, 304, CW, "Cooldown sweep opacity", 0, 100, 5,
-            function() return db.cdAlpha end, function(v) db.cdAlpha = v; S:Refresh() end, Pct)
 
-        UI.Button(page, "ResetPos", RX, 212, "Reset position", 180, function()
-            db.x, db.y, db.attach = 0, 135, true
-            if S.attachBox then ZO_CheckButton_SetCheckState(S.attachBox, true) end
-            relayout()
-        end)
+        L:Header("Skill bars")
+        L:Check("Enable", function() return db.enabled end,
+            function(v) db.enabled = v; S:ApplyEnabled() end)
+        L:Check("Dim the bar you are not on", function() return db.dimInactive end,
+            function(v) db.dimInactive = v; S:Refresh() end)
+
+        L:Header("On the icons")
+        L:Check("Skill timers", function() return db.showTimers end,
+            function(v) db.showTimers = v; S:Tick() end,
+            "Time left on what each skill applied, on both bars.")
+        L:Check("Cooldown numbers", function() return db.showNumbers end,
+            function(v) db.showNumbers = v; S:Refresh() end)
+        L:Check("Resource frame when short of the cost", function() return db.showCost end,
+            function(v) db.showCost = v; S:Refresh() end)
+
+        L:Header("Ultimate")
+        L:Check("Percent of its cost", function() return db.ultPercent end,
+            function(v) db.ultPercent = v; S:Refresh() end)
+        L:Check("Meter between the bars", function() return db.ultMeter end,
+            function(v) db.ultMeter = v; relayout() end)
+
+        R:Header("Size")
+        R:Slider("Icon size", 24, 64, 1,
+            function() return db.size end, function(v) db.size = v; relayout() end, SKT.Grid.Fmt)
+        R:Slider("Gap between the bars", 0, 24, 1,
+            function() return db.gap end, function(v) db.gap = v; relayout() end, SKT.Grid.Fmt)
+        R:Button("Reset position", 180, function() db.x, db.y = 0, 135; relayout() end)
+
+        R:Header("Cooldown sweep")
+        R:Slider("Global cooldown", 0, 100, 5,
+            function() return db.gcdAlpha end, function(v) db.gcdAlpha = v; S:Refresh() end, Pct)
+        R:Slider("Other cooldowns", 0, 100, 5,
+            function() return db.cdAlpha end, function(v) db.cdAlpha = v; S:Refresh() end, Pct)
     end,
 })

@@ -20,6 +20,7 @@ local EM  = EVENT_MANAGER
 local NS = "SKToolsESO_Resources"
 local R = {}
 SKT.Resources = R
+local R_ = R      -- the same table, for the settings tab (where R is its right column)
 
 -- the SKTools pastels (same values as the WoW version)
 local COLORS = {
@@ -46,6 +47,7 @@ local BARS = {
 }
 
 local function Clamp01(v) return math.max(0, math.min(1, v)) end
+local D_Clamp = Clamp01
 
 -- one screen pixel in UI units, and a value put on whole pixels
 local function Px()
@@ -223,6 +225,12 @@ function R:Build()
     end
     self.castBar = MakeBar(body)
 
+    -- damage shields: a pale band over the top of the health bar, as long as the shield is
+    -- (out of your most health), with the amount beside the health value
+    local hp = self.bars.health
+    hp.shieldBand = Tex(hp, 6)
+    hp.shieldEdge = Tex(hp, 6)
+
     -- seams between bars and the silver ring round the block
     self.seams = {}
     for i = 1, 3 do self.seams[i] = Tex(body, 8) end
@@ -231,18 +239,10 @@ function R:Build()
     for i = 1, 4 do self.ring.dots[i] = Tex(body, 9) end
 
     -- shown while unlocked
-    local mover = WM:CreateControl("$(parent)Mover", root, CT_BACKDROP)
-    mover:SetCenterColor(0.16, 0.22, 0.38, 0.35)
-    mover:SetEdgeColor(SKT.col(SKT.colors.title))
-    mover:SetEdgeTexture("", 1, 1, 1, 0)
-    mover:SetAnchor(TOPLEFT, root, TOPLEFT, -6, -22)
-    mover:SetAnchor(BOTTOMRIGHT, root, BOTTOMRIGHT, 6, 6)
-    mover:SetDrawLevel(10)
-    local mt = SKT.MakeLabel("$(parent)Text", mover, "SKTools: health, magicka, stamina, cast bar",
-        "ZoFontGameSmall", SKT.colors.title)
-    mt:SetAnchor(TOP, mover, TOP, 0, 3)
-    self.mover = mover
+    -- its name and outline while unlocked
+    self.mover = SKT.Grid.Tag(root, "Resource bars")
 
+    self:BuildMount()
     self.fragment = ZO_HUDFadeSceneFragment:New(root)
 end
 
@@ -283,6 +283,79 @@ function R:DrawRing(w, h)
         local cr, cg, cb = At(s[2])
         VGrad(d[i], cr, cg, cb, 1, cr, cg, cb, 1)
     end
+end
+
+---------------------------------------------------------------------------
+-- Mount stamina: a green pill under the bars while you ride, narrower than them
+---------------------------------------------------------------------------
+local CIRCLE = "SKTools-ESO/Media/Circle.dds"
+local MOUNT = COMBAT_MECHANIC_FLAGS_MOUNT_STAMINA or POWERTYPE_MOUNT_STAMINA
+
+-- a pill: a round end each side and a straight middle
+local function NewPill(parent, level)
+    local p = {}
+    p.l = Tex(parent, level); p.l:SetTexture(CIRCLE)
+    p.r = Tex(parent, level); p.r:SetTexture(CIRCLE)
+    p.m = Tex(parent, level)
+    return p
+end
+
+local function PlacePill(p, parent, x, y, w, h, r1, g1, b1, a1, r2, g2, b2, a2)
+    w = math.max(w, h)
+    p.l:ClearAnchors(); p.l:SetAnchor(TOPLEFT, parent, TOPLEFT, x, y); p.l:SetDimensions(h, h)
+    p.r:ClearAnchors(); p.r:SetAnchor(TOPLEFT, parent, TOPLEFT, x + w - h, y); p.r:SetDimensions(h, h)
+    p.m:ClearAnchors(); p.m:SetAnchor(TOPLEFT, parent, TOPLEFT, x + h / 2, y)
+    p.m:SetDimensions(math.max(0.01, w - h), h)
+    p.m:SetHidden(w - h < 0.5)
+    for _, t in ipairs({ p.l, p.r, p.m }) do VGrad(t, r1, g1, b1, a1, r2, g2, b2, a2) end
+end
+
+local function ShowPill(p, on)
+    p.l:SetHidden(not on); p.r:SetHidden(not on)
+    if not on then p.m:SetHidden(true) end
+end
+
+function R:BuildMount()
+    local m = WM:CreateControl(nil, self.root, CT_CONTROL)
+    m.frame = NewPill(m, 1)     -- silver, a pixel bigger all round
+    m.track = NewPill(m, 2)
+    m.fill = NewPill(m, 3)
+    self.mount = m
+end
+
+function R:LayoutMount()
+    local m, db = self.mount, self.db
+    if not m then return end
+    local px = Px()
+    local w = OnPx(SKT.Grid.Boxes(db.width) * (db.mountWidth or 60) / 100)
+    local h = OnPx(db.mountHeight or 8)
+    m.w, m.h = w, h
+    m:ClearAnchors()
+    m:SetAnchor(TOP, self.root, BOTTOM, 0, OnPx(6))
+    m:SetDimensions(w, h)
+    local t, b = SILVER_TOP, SILVER_BOTTOM
+    PlacePill(m.frame, m, -px, -px, w + 2 * px, h + 2 * px, t[1], t[2], t[3], 1, b[1], b[2], b[3], 1)
+    PlacePill(m.track, m, 0, 0, w, h, 0.40, 0.40, 0.40, db.alpha or 1, 0.07, 0.07, 0.07, db.alpha or 1)
+    self:UpdateMount()
+end
+
+function R:UpdateMount()
+    local m, db = self.mount, self.db
+    if not m or not m.w then return end
+    local riding = IsMounted and IsMounted()
+    local show = db.enabled and db.showMount and (riding or not db.locked)
+    m:SetHidden(not show)
+    ShowPill(m.frame, show); ShowPill(m.track, show)
+    if not show then ShowPill(m.fill, false) return end
+    local cur, max = GetUnitPower("player", MOUNT)
+    local f = (riding and max and max > 0) and D_Clamp((cur or 0) / max) or (riding and 0 or 0.7)
+    if f <= 0 then ShowPill(m.fill, false) return end
+    local c = self:Color("stamina")
+    PlacePill(m.fill, m, 0, 0, m.w * f, m.h,
+        Clamp01(c[1] * 1.15 + 0.12), Clamp01(c[2] * 1.15 + 0.12), Clamp01(c[3] * 1.15 + 0.12), 1,
+        c[1] * 0.55, c[2] * 0.55, c[3] * 0.55, 1)
+    ShowPill(m.fill, true)
+    m.fill.m:SetHidden(m.w * f - m.h < 0.5)
 end
 
 function R:Layout()
@@ -326,6 +399,7 @@ function R:Layout()
     for i = #strips, 3 do self.seams[i]:SetHidden(true) end
 
     self.root:SetDimensions(w, y)
+    self:LayoutMount()
     self:DrawRing(w, y)
 
     -- placed by its top (the bars grow down), centred on x; both from the middle of the screen and,
@@ -365,16 +439,28 @@ end
 -- damage shield: a lighter segment where the health fill ends, as long as the shield, cut off at the bar's end
 function R:UpdateShield()
     local hp = self.bars.health
+    hp.extra:SetHidden(true)
     local v = self.db.showShield and (self.shield or 0) or 0
-    if v <= 0 or not hp.w then hp.extra:SetHidden(true) return end
-    local room = math.max(0, hp.max - hp.cur)
-    local w = hp.w * math.min(v, room) / hp.max
-    if w < 0.5 then hp.extra:SetHidden(true) return end
-    local c = hp.color or COLORS.health
-    local light = { c[1] * 0.45 + 0.55, c[2] * 0.45 + 0.55, c[3] * 0.45 + 0.55 }
-    Gradient(hp.extra, light, 1, 0.75)
-    hp.extra:SetWidth(w)
-    hp.extra:SetHidden(false)
+    local band, edge = hp.shieldBand, hp.shieldEdge
+    if v <= 0 or not hp.w or not band then
+        if band then band:SetHidden(true); edge:SetHidden(true) end
+        hp.right:SetText(tostring(zo_round(hp.cur)))
+        return
+    end
+    local w = math.max(1, hp.w * math.min(1, v / hp.max))
+    local bh = math.max(Px(), OnPx(hp.h * 0.45))
+    band:ClearAnchors()
+    band:SetAnchor(TOPLEFT, hp, TOPLEFT, 0, 0)
+    band:SetDimensions(w, bh)
+    VGrad(band, 0.92, 0.96, 1, 0.85, 0.70, 0.84, 1, 0.55)
+    band:SetHidden(false)
+    -- a bright line at its end, so even a small shield shows
+    edge:ClearAnchors()
+    edge:SetAnchor(TOPLEFT, hp, TOPLEFT, math.max(0, w - Px()), 0)
+    edge:SetDimensions(Px(), hp.h)
+    VGrad(edge, 1, 1, 1, 0.95, 1, 1, 1, 0.95)
+    edge:SetHidden(false)
+    hp.right:SetText("|cBFDFFF+" .. zo_round(v) .. "|r  " .. zo_round(hp.cur))
 end
 
 function R:QueryShield()
@@ -497,6 +583,7 @@ function R:ApplyLock()
     self.root:SetMouseEnabled(not locked)
     self.mover:SetHidden(locked)
     self:Layout()
+    self:UpdateMount()
     self:CastPreview()
     self:UpdateIdle()
     SKT.Grid:Update()
@@ -541,18 +628,22 @@ end
 ---------------------------------------------------------------------------
 function R:RegisterEvents()
     EM:RegisterForEvent(NS, EVENT_POWER_UPDATE, function(_, _, _, powerType, value, max)
+        if powerType == MOUNT then self:UpdateMount() return end
         for _, b in ipairs(self.bars) do
             if b.def.power == powerType then self:UpdateBar(b, value, max) break end
         end
         self:UpdateIdle()
     end)
+    if EVENT_MOUNTED_STATE_CHANGED then
+        EM:RegisterForEvent(NS .. "Mount", EVENT_MOUNTED_STATE_CHANGED, function() self:UpdateMount() end)
+    end
     EM:AddFilterForEvent(NS, EVENT_POWER_UPDATE, REGISTER_FILTER_UNIT_TAG, "player")
 
     local function OnShield()
         self:QueryShield()
         self:UpdateShield()
     end
-    for i, ev in ipairs({ EVENT_UNIT_ATTRIBUTE_VISUAL_ADDED, EVENT_UNIT_ATTRIBUTE_VISUAL_UPDATED,
+    for i, ev in pairs({ EVENT_UNIT_ATTRIBUTE_VISUAL_ADDED, EVENT_UNIT_ATTRIBUTE_VISUAL_UPDATED,
                           EVENT_UNIT_ATTRIBUTE_VISUAL_REMOVED }) do
         EM:RegisterForEvent(NS .. "Shield" .. i, ev, OnShield)
         EM:AddFilterForEvent(NS .. "Shield" .. i, ev, REGISTER_FILTER_UNIT_TAG, "player")
@@ -567,7 +658,7 @@ function R:RegisterEvents()
     -- UI scale changes move the pixel grid
     EM:RegisterForEvent(NS, EVENT_ALL_GUI_SCREENS_RESIZED, function() self:ApplyLayout() end)
 
-    for _, result in ipairs({ ACTION_RESULT_BEGIN_CHANNEL, ACTION_RESULT_BEGIN }) do
+    for _, result in pairs({ ACTION_RESULT_BEGIN_CHANNEL, ACTION_RESULT_BEGIN }) do
         local id = NS .. "CastBegin" .. result
         EM:RegisterForEvent(id, EVENT_COMBAT_EVENT, OnCastBegin)
         EM:AddFilterForEvent(id, EVENT_COMBAT_EVENT,
@@ -575,7 +666,7 @@ function R:RegisterEvents()
             REGISTER_FILTER_SOURCE_COMBAT_UNIT_TYPE, COMBAT_UNIT_TYPE_PLAYER)
     end
 
-    for _, result in ipairs({ ACTION_RESULT_INTERRUPT, ACTION_RESULT_STUNNED, ACTION_RESULT_KNOCKBACK,
+    for _, result in pairs({ ACTION_RESULT_INTERRUPT, ACTION_RESULT_STUNNED, ACTION_RESULT_KNOCKBACK,
                               ACTION_RESULT_FEARED, ACTION_RESULT_STAGGERED }) do
         if result then
             local id = NS .. "CastStop" .. result
@@ -669,6 +760,9 @@ SKT:RegisterModule({
         hideDefault  = true,      -- ESO's own resource bars off while the block shows
         hideWhenIdle = false,
         showShield   = true,
+        showMount    = true,      -- mount stamina, while riding
+        mountWidth   = 60,        -- % of the bars' width
+        mountHeight  = 8,
         castEnabled  = true,
         castShowCastTime = false,
         -- x, y: the block's top centre from the middle of the screen
@@ -682,6 +776,10 @@ SKT:RegisterModule({
     OnLoad = function(self, db)
         R.db = db
         db.colors = db.colors or {}
+        -- always: ESO's own resource bars hidden; the block always shown; the cast bar for
+        -- channelled and cast-time abilities
+        db.hideDefault, db.hideWhenIdle = true, false
+        db.castEnabled, db.castShowCastTime = true, true
         -- 0.2.x stored the position as a top-left corner: start from the default place instead
         if db.layoutVersion ~= 3 then db.x, db.y, db.layoutVersion = 0, 136, 3 end
         -- settings saved by older versions in another form (0.2.x had cylinder = true/false)
@@ -699,75 +797,56 @@ SKT:RegisterModule({
     end,
 
     BuildTab = function(self, page, db)
-        local UI = SKT.UI
-        local L, RX, CW = 16, 316, 260
+        local L = SKT.UI.Column(page, 16, 268)
+        local R = SKT.UI.Column(page, 316, 268)
         local painters = {}
-        local function relayout() R:ApplyLayout() end
+        local function relayout() R_:ApplyLayout() end
         local function repaint() relayout(); for _, p in ipairs(painters) do p() end end
 
-        -- left: the block
-        UI.Header(page, "HeadBlock", L, 12, "Resource bars")
-
-        UI.Checkbox(page, "Enabled", L, 48, "Enable",
+        L:Header("Resource bars")
+        L:Check("Enable",
             function() return db.enabled end,
-            function(v) db.enabled = v; R:ApplyEnabled() end)
-        UI.Checkbox(page, "Locked", L, 74, "Lock position",
-            function() return db.locked end,
-            function(v) db.locked = v; R:ApplyLock() end,
-            "Untick to drag the block. The cast bar shows while unlocked.")
-        UI.Checkbox(page, "HideDefault", L, 100, "Hide ESO's own resource bars",
-            function() return db.hideDefault end,
-            function(v) db.hideDefault = v; R:ApplyDefaultBars() end)
-        UI.Checkbox(page, "Idle", L, 126, "Hide when full and out of combat",
-            function() return db.hideWhenIdle end,
-            function(v) db.hideWhenIdle = v; R:UpdateIdle() end)
-        UI.Checkbox(page, "Shield", L, 152, "Show damage shields",
+            function(v) db.enabled = v; R_:ApplyEnabled() end)
+        L:Check("Damage shields on the health bar",
             function() return db.showShield end,
-            function(v) db.showShield = v; R:UpdateShield() end,
-            "A lighter segment after the health fill, as long as the shield.")
-        UI.Checkbox(page, "Cast", L, 178, "Cast bar for channelled abilities",
-            function() return db.castEnabled end,
-            function(v) db.castEnabled = v; relayout() end)
-        UI.Checkbox(page, "CastTime", L, 204, "Also show cast-time abilities",
-            function() return db.castShowCastTime end,
-            function(v) db.castShowCastTime = v end,
-            "Channels drain, casts fill up.")
+            function(v) db.showShield = v; R_:UpdateShield() end)
+        L:Check("Mount stamina while riding",
+            function() return db.showMount end,
+            function(v) db.showMount = v; R_:UpdateMount() end)
 
-        UI.Slider(page, "Width", L, 240, CW, "Width", 120, 480, 4,
-            function() return db.width end, function(v) db.width = v; relayout() end,
-            SKT.Grid.Fmt)
-        UI.Slider(page, "Health", L, 284, CW, "Health height", 6, 40, 1,
-            function() return db.health end, function(v) db.health = v; relayout() end,
-            SKT.Grid.Fmt)
-        UI.Slider(page, "Power", L, 328, CW, "Magicka / stamina height", 4, 30, 1,
-            function() return db.power end, function(v) db.power = v; relayout() end,
-            SKT.Grid.Fmt)
-        UI.Slider(page, "CastH", L, 372, CW, "Cast bar height", 6, 36, 1,
-            function() return db.castHeight end, function(v) db.castHeight = v; relayout() end,
-            SKT.Grid.Fmt)
-        UI.Button(page, "ResetPos", L, 420, "Reset position", 180, function()
-            db.x, db.y = 0, 136
-            relayout()
-        end)
+        L:Header("Size")
+        L:Slider("Width", 120, 480, 4,
+            function() return db.width end, function(v) db.width = v; relayout() end, SKT.Grid.Fmt)
+        L:Slider("Health", 6, 40, 1,
+            function() return db.health end, function(v) db.health = v; relayout() end, SKT.Grid.Fmt)
+        L:Slider("Magicka and stamina", 4, 30, 1,
+            function() return db.power end, function(v) db.power = v; relayout() end, SKT.Grid.Fmt)
+        L:Slider("Cast bar", 6, 36, 1,
+            function() return db.castHeight end, function(v) db.castHeight = v; relayout() end, SKT.Grid.Fmt)
+        L:Slider("Mount stamina width", 20, 100, 5,
+            function() return db.mountWidth end, function(v) db.mountWidth = v; relayout() end,
+            function(v) return v .. "%" end)
+        L:Slider("Mount stamina height", 4, 16, 1,
+            function() return db.mountHeight end, function(v) db.mountHeight = v; relayout() end,
+            function(v) return v .. " px" end)
+        L:Button("Reset position", 180, function() db.x, db.y = 0, 136; relayout() end)
 
-        -- right: the look (same options as WoW's resource display page)
-        UI.Header(page, "HeadLook", RX, 12, "Look")
-        UI.Slider(page, "Alpha", RX, 48, CW, "Track opacity", 0, 100, 5,
+        R:Header("Look")
+        R:Slider("Track opacity", 0, 100, 5,
             function() return zo_round((db.alpha or 1) * 100) end,
             function(v) db.alpha = v / 100; relayout() end,
             function(v) return v .. "%" end)
-        UI.Slider(page, "Gradient", RX, 92, CW, "Bar gradient (darker on the left)", 0, 100, 5,
+        R:Slider("Gradient", 0, 100, 5,
             function() return zo_round(math.min((db.gradient or 0) / GRADIENT_MAX, 1) * 100) end,
             function(v) db.gradient = v / 100 * GRADIENT_MAX; repaint() end, NoneOrPercent)
-        UI.Slider(page, "Cylinder", RX, 136, CW, "Cylinder shading (top / bottom)", 0, 100, 5,
+        R:Slider("Cylinder shading", 0, 100, 5,
             function() return zo_round(math.min((db.cylinder or 0) / CYLINDER_MAX, 1) * 100) end,
             function(v) db.cylinder = v / 100 * CYLINDER_MAX; repaint() end, NoneOrPercent)
 
-        UI.Header(page, "HeadColors", RX, 184, "Bar colours")
-        for i, row in ipairs(COLOR_ROWS) do
-            painters[#painters + 1] = ColorRow(page, db, row, RX, 216 + (i - 1) * 32)
+        R:Header("Colours")
+        for _, row in ipairs(COLOR_ROWS) do
+            painters[#painters + 1] = ColorRow(page, db, row, R.x, R.y)
+            R:Space(32)
         end
-        UI.Text(page, "ColorNote", RX, 216 + #COLOR_ROWS * 32 + 6,
-            "Click a colour to change it. The swatch previews the gradient and cylinder shading.", CW)
     end,
 })

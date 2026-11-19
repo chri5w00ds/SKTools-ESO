@@ -32,6 +32,13 @@ function D.VGrad(t, r1, g1, b1, a1, r2, g2, b2, a2)
     t:SetVertexColors(VERTEX_POINTS_BOTTOMRIGHT, r2, g2, b2, a2)
 end
 
+-- a flat colour held by the control's own colour (white vertices), for fills whose opacity is a
+-- setting: it keeps through the HUD's scene changes
+function D.Fill(t, r, g, b, a)
+    D.VGrad(t, 1, 1, 1, 1, 1, 1, 1, 1)
+    t:SetColor(r, g, b, a or 1)
+end
+
 function D.Solid(t, r, g, b, a)
     D.VGrad(t, r, g, b, a or 1, r, g, b, a or 1)
 end
