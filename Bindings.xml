@@ -1,0 +1,10 @@
+<Bindings>
+    <Layer name="SI_KEYBINDINGS_LAYER_GENERAL">
+        <Category name="SKTools">
+            <Action name="SKTOOLS_HEAD_ICONS">
+                <Down>if SKT and SKT.Icons then SKT.Icons:KeyDown() end</Down>
+                <Up>if SKT and SKT.Icons then SKT.Icons:KeyUp() end</Up>
+            </Action>
+        </Category>
+    </Layer>
+</Bindings>
