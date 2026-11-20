@@ -47,6 +47,14 @@ local DELAYED = {
     -- two detonations, 3 s apart: the whole 6 s (the game's duration covers only the first)
     ["Subterranean Assault"] = { secs = 6, fixed = true },
 }
+-- skills whose effect comes and goes in short pulses (the netches: a stronger effect every 5 s):
+-- the timer keeps the skill's whole duration from the cast, never shortened by a pulse
+local WHOLE = { ["Betty Netch"] = true, ["Blue Betty"] = true, ["Bull Netch"] = true }
+local function Whole(id)
+    local ok, name = pcall(GetAbilityName, id)
+    return ok and name and WHOLE[zo_strformat("<<1>>", name)] or false
+end
+
 local function Delayed(id)
     local ok, name = pcall(GetAbilityName, id)
     if not ok or not name or name == "" then return nil end
@@ -228,9 +236,22 @@ local function SlotAbility(slot, cat)
     return id, craftedId
 end
 
--- the ultimate's cost, asked a few ways (the slot, then the ability)
-local function UltCost(slot, cat, abilityId)
+-- the ultimate's cost, asked a few ways (the slot, then the ability). For the bar you're not on,
+-- the ability's own cost comes first: the game answers the slot question for that bar with the
+-- ultimate on the bar you ARE on (a Warden's unsummoned companion ultimate showed the other
+-- bar's percentage)
+local ULT_SEEN = {}
+local function UltCost(slot, cat, abilityId, active)
     local ULT = COMBAT_MECHANIC_FLAGS_ULTIMATE
+    -- what it cost while its bar was the one in use, kept by ability: the other bar then shows it
+    -- just as it showed there (no cost, no percentage)
+    if not active and abilityId then
+        local seen = ULT_SEEN[abilityId]
+        if seen ~= nil then return seen or nil end
+        local own = Call(GetAbilityCost, abilityId, ULT, nil, "player") or Call(GetAbilityCost, abilityId, ULT)
+        if type(own) == "number" and own > 0 then return own end
+        return nil
+    end
     local cost = Call(GetSlotAbilityCost, slot, ULT, cat)
     if type(cost) ~= "number" or cost <= 0 then
         local c2, mech = Call(GetSlotAbilityCost, slot, cat)
@@ -239,12 +260,16 @@ local function UltCost(slot, cat, abilityId)
     if (type(cost) ~= "number" or cost <= 0) and abilityId then
         cost = Call(GetAbilityCost, abilityId, ULT, nil, "player") or Call(GetAbilityCost, abilityId, ULT)
     end
-    if type(cost) == "number" and cost > 0 then return cost end
+    if type(cost) == "number" and cost > 0 then
+        if abilityId then ULT_SEEN[abilityId] = cost end
+        return cost
+    end
+    if abilityId then ULT_SEEN[abilityId] = false end
 end
 
-local function SlotCost(slot, cat, abilityId)
+local function SlotCost(slot, cat, abilityId, active)
     if slot == ULT then
-        local cost = UltCost(slot, cat, abilityId)
+        local cost = UltCost(slot, cat, abilityId, active ~= false)
         if cost then return cost, COMBAT_MECHANIC_FLAGS_ULTIMATE, "ultimate" end
         return nil
     end
@@ -374,7 +399,7 @@ function S:PaintIcon(f, slot, cat, activeBar)
 
     local dim = self.db.dimInactive and not activeBar
     local cost, mech, key
-    if not empty then cost, mech, key = SlotCost(slot, cat, f.abilityId) end
+    if not empty then cost, mech, key = SlotCost(slot, cat, f.abilityId, activeBar) end
     local power = mech and GetUnitPower("player", mech) or 0
     local short = cost and power < cost
 
@@ -427,6 +452,22 @@ function S:IsSlotted(id)
     return false
 end
 
+-- a slotted skill by name: some skills' effects carry their own ability id, not the skill's
+-- (Cutting Dive's bleed): the effect's name is the skill's, so the timer still finds its slot
+function S:SlottedByName(name)
+    if not name or name == "" or not self.groups then return nil end
+    name = zo_strformat("<<1>>", name)
+    for _, grp in ipairs(self.groups) do
+        for _, f in ipairs(grp.icons) do
+            if f.abilityId and f.abilityId ~= 0 then
+                local ok, n = pcall(GetAbilityName, f.abilityId)
+                if ok and n and zo_strformat("<<1>>", n) == name then return f.abilityId end
+            end
+        end
+    end
+    return nil
+end
+
 function S:Refresh()
     if not self.groups then return end
     self:UpdateUltMeter()
@@ -472,6 +513,7 @@ function S:Tick()
             end
         end
     end
+    if self:TickQuickslot() then any = true end
     -- forget timers that have run out
     for id, t in pairs(self.timers) do if t <= nowS then self.timers[id] = nil end end
     for k, st in pairs(self.slotTimers) do if st.ends <= nowS then self.slotTimers[k] = nil end end
@@ -495,65 +537,167 @@ function S:UpdateIdle()
     self.body:SetAlpha(show and 1 or 0)
 end
 
--- the gap between the bars; with the ultimate meter in it, at least two grid boxes
+-- the gap between the bars: with the middle column on, exactly one cell, so the whole pane is
+-- seven cells wide (the column shares its frame lines with both bars)
 local function Box() local G = SKT.Grid; return G.On() and G.Size() or 8 end
 
 function S:Gap()
     local G = SKT.Grid
-    local g = G.Boxes(self.db.gap, true)
-    if self.db.ultMeter then g = math.max(g, 2 * Box()) end
-    return D.OnPx(g)
+    if self.db.ultMeter then return D.OnPx(G.Boxes(self.db.size)) end
+    return D.OnPx(G.Boxes(self.db.gap, true))
 end
 
--- the ultimate meter: a thin bar standing in the gap between the two halves, filling from the
--- bottom with your ultimate out of the most you can hold (500)
+---------------------------------------------------------------------------
+-- The middle column: the quickslot on top (the item chosen in the quickslot wheel, how many you
+-- have, and a potion's cooldown), and the ultimate below (filling from the bottom, with your
+-- ultimate in points, up to the most you can hold: 500)
+---------------------------------------------------------------------------
+local QS_CAT = HOTBAR_CATEGORY_QUICKSLOT_WHEEL
+
+function S:BuildMiddle()
+    local m = {}
+    local body = self.body
+    m.box = WM:CreateControl(nil, body, CT_CONTROL)
+    -- the quickslot
+    local q = WM:CreateControl(nil, m.box, CT_CONTROL)
+    q.bg = D.Tex(q, 1); q.bg:SetAnchorFill(q); D.Solid(q.bg, 0, 0, 0, 0.6)
+    q.tex = WM:CreateControl(nil, q, CT_TEXTURE)
+    q.tex:SetAnchorFill(q); q.tex:SetTextureCoords(0.08, 0.92, 0.08, 0.92); q.tex:SetDrawLevel(2)
+    q.cd = WM:CreateControl(nil, q, CT_COOLDOWN)
+    q.cd:SetAnchorFill(q); q.cd:SetFillColor(0, 0, 0, 0.62); q.cd:SetDrawLevel(3)
+    q.num = WM:CreateControl(nil, q, CT_LABEL); q.num:SetColor(1, 1, 1, 1); q.num:SetDrawLevel(7)
+    q.count = WM:CreateControl(nil, q, CT_LABEL); q.count:SetColor(1, 1, 1, 1); q.count:SetDrawLevel(7)
+    q.count:SetHorizontalAlignment(TEXT_ALIGN_CENTER)   -- grows and shrinks from the middle
+    q:SetMouseEnabled(true)
+    q:SetHandler("OnMouseEnter", function(c)
+        local slot = GetCurrentQuickslot and GetCurrentQuickslot()
+        if not slot then return end
+        InitializeTooltip(ItemTooltip, c, BOTTOM, 0, -6, TOP)
+        if ItemTooltip.SetQuickslot then pcall(ItemTooltip.SetQuickslot, ItemTooltip, slot) end
+    end)
+    q:SetHandler("OnMouseExit", function() ClearTooltip(ItemTooltip) end)
+    m.q = q
+    -- the ultimate
+    local u = WM:CreateControl(nil, m.box, CT_CONTROL)
+    u.track = D.Tex(u, 1); u.track:SetAnchorFill(u); D.Solid(u.track, 0, 0, 0, 0.6)
+    u.fill = D.Tex(u, 2)
+    u.num = WM:CreateControl(nil, u, CT_LABEL); u.num:SetColor(1, 1, 1, 1); u.num:SetDrawLevel(7)
+    m.u = u
+    m.ring = D.NewRing(m.box, 9)
+    m.line = D.Tex(m.box, 8)
+    self.middle = m
+end
+
+-- placed in the gap: x is where the left bar ends (3 cells), s a cell, h the bars' height
 function S:LayoutUltMeter(x, gap, h)
-    local m = self.meter
-    if not m then
-        m = { track = D.Tex(self.body, 1), fill = D.Tex(self.body, 2), ring = D.NewRing(self.body, 9) }
-        self.meter = m
-    end
-    local px = D.Px()
-    local on = self.db.ultMeter and gap >= 2 * px
+    if not self.middle then self:BuildMiddle() end
+    local m = self.middle
+    local on = self.db.ultMeter
     m.on = on
-    m.track:SetHidden(not on)
-    m.fill:SetHidden(not on)
-    if not on then
-        for _, t in ipairs(m.ring.edges) do t:SetHidden(true) end
-        for _, t in ipairs(m.ring.dots) do t:SetHidden(true) end
-        return
-    end
-    -- two grid boxes wide, centred exactly in the space between the two bars' frames, with the
-    -- same number of screen pixels of air on each side (worked out in whole pixels)
-    local trim = SKT.Grid.Trim()
-    local left = x - trim                                   -- just past the left bar's frame
-    local space = zo_round((gap + trim) / px)               -- pixels up to the right bar's frame
-    local w = math.min(space, zo_round(2 * Box() / px) - zo_round(trim / px))
-    if (space - w) % 2 == 1 then w = w - 1 end              -- even air, so both sides match
-    local mx = left + ((space - w) / 2) * px
-    local mw = math.max(1, w) * px
-    m.x, m.w, m.h = mx, mw, h
-    m.track:ClearAnchors()
-    m.track:SetAnchor(TOPLEFT, self.body, TOPLEFT, mx, 0)
-    m.track:SetDimensions(mw, h)
-    D.Solid(m.track, 0, 0, 0, 0.6)
-    D.DrawRing(m.ring, self.body, mx, 0, mw, h, D.White)
+    m.box:SetHidden(not on)
+    for _, t in ipairs(m.ring.edges) do t:SetHidden(not on) end
+    for _, t in ipairs(m.ring.dots) do t:SetHidden(not on) end
+    if not on then return end
+    local G = SKT.Grid
+    local px = D.Px()
+    local trim = G.Trim()
+    local s = gap
+    local w = s - trim
+    m.box:ClearAnchors()
+    m.box:SetAnchor(TOPLEFT, self.body, TOPLEFT, x, 0)
+    m.box:SetDimensions(w, h)
+    m.q:ClearAnchors(); m.q:SetAnchor(TOPLEFT, m.box, TOPLEFT, 0, 0); m.q:SetDimensions(w, s)
+    m.u:ClearAnchors(); m.u:SetAnchor(TOPLEFT, m.box, TOPLEFT, 0, s); m.u:SetDimensions(w, h - s)
+    m.w, m.uh = w, h - s
+    -- numbers: as on the skills (centred on the cell, a touch lower for the digits)
+    local fontSize = math.max(10, math.floor(s * 0.46))
+    local font = "$(BOLD_FONT)|" .. fontSize .. "|thick-outline"
+    local down = D.OnPx(fontSize * 0.14)
+    m.q.num:SetFont(font)
+    -- the cooldown a little above the middle, the count centred at the bottom, clear of each other
+    m.q.num:ClearAnchors(); m.q.num:SetAnchor(CENTER, m.q, TOPLEFT, s / 2, s * 0.38 + down)
+    m.q.count:SetFont("$(BOLD_FONT)|" .. math.max(9, math.floor(s * 0.30)) .. "|thick-outline")
+    m.q.count:ClearAnchors(); m.q.count:SetAnchor(BOTTOM, m.q, TOPLEFT, s / 2, s + D.OnPx(2))
+    local uFont = "$(BOLD_FONT)|" .. math.max(9, math.floor(s * 0.36)) .. "|thick-outline"
+    m.u.num:SetFont(uFont)
+    m.u.num:ClearAnchors(); m.u.num:SetAnchor(CENTER, m.u, TOPLEFT, s / 2, (h - s) / 2 + D.OnPx(s * 0.36 * 0.14))
+    -- the frame: round the column and across between the two cells (shared with the bars')
+    m.line:ClearAnchors(); m.line:SetAnchor(TOPLEFT, m.box, TOPLEFT, 0, s - px); m.line:SetDimensions(w, px)
+    D.Solid(m.line, 1, 1, 1, 1)
+    D.DrawRing(m.ring, m.box, 0, 0, w, h, D.White)
     self:UpdateUltMeter()
+    self:UpdateQuickslot()
 end
 
 function S:UpdateUltMeter()
-    local m = self.meter
+    local m = self.middle
     if not (m and m.on) then return end
     local cur, max = GetUnitPower("player", COMBAT_MECHANIC_FLAGS_ULTIMATE)
     max = (max and max > 0) and max or 500
-    local f = D.Clamp01((cur or 0) / max)
-    m.fill:ClearAnchors()
-    m.fill:SetAnchor(BOTTOMLEFT, self.body, TOPLEFT, m.x, m.h)
-    m.fill:SetDimensions(m.w, math.max(0.01, m.h * f))
-    m.fill:SetHidden(f <= 0)
+    cur = cur or 0
+    local f = D.Clamp01(cur / max)
+    local u = m.u
+    u.fill:ClearAnchors()
+    u.fill:SetAnchor(BOTTOMLEFT, u, BOTTOMLEFT, 0, 0)
+    u.fill:SetDimensions(m.w, math.max(0.01, m.uh * f))
+    u.fill:SetHidden(f <= 0)
     local c = ULT_COLOR
-    D.VGrad(m.fill, math.min(1, c[1] * 1.15 + 0.12), math.min(1, c[2] * 1.15 + 0.12), math.min(1, c[3] * 1.15 + 0.12), 1,
+    D.VGrad(u.fill, math.min(1, c[1] * 1.15 + 0.12), math.min(1, c[2] * 1.15 + 0.12), math.min(1, c[3] * 1.15 + 0.12), 1,
         c[1] * 0.55, c[2] * 0.55, c[3] * 0.55, 1)
+    u.num:SetText(tostring(cur))
+end
+
+function S:UpdateQuickslot()
+    local m = self.middle
+    if not (m and m.on) then return end
+    local q = m.q
+    local slot = GetCurrentQuickslot and GetCurrentQuickslot()
+    local tex = slot and Call(GetSlotTexture, slot, QS_CAT)
+    local empty = not tex or tex == ""
+    q.tex:SetHidden(empty)
+    if not empty then q.tex:SetTexture(tex) end
+    local count = slot and Call(GetSlotItemCount, slot, QS_CAT)
+    q.count:SetText((not empty and count and count > 0) and tostring(count) or "")
+    -- the cooldown (potions): the sweep, and the seconds in :TickQuickslot
+    local remain, duration, global = 0, 0, false
+    if slot and not empty then
+        local r, d, g = Call(GetSlotCooldownInfo, slot, QS_CAT)
+        remain, duration, global = r or 0, d or 0, g
+    end
+    -- the global cooldown (or anything as short): the sweep only, as on the skills; a potion's
+    -- own cooldown: the sweep and the seconds
+    local gcd = global or duration <= 1500
+    if remain > 0 and duration > 0 then
+        local now = GetFrameTimeMilliseconds()
+        if q.cdEnd == nil or math.abs((now + remain) - q.cdEnd) > 100 then
+            q.cd:StartCooldown(remain, duration, CD_TYPE_RADIAL, CD_TIME_TYPE_TIME_UNTIL, false)
+        end
+        local a = ((gcd and self.db.gcdAlpha or self.db.cdAlpha) or 62) / 100
+        q.cd:SetFillColor(0, 0, 0, a)
+        q.cd:SetHidden(a <= 0)
+        q.cdEnd = now + remain
+        q.cdGlobal = gcd
+    else
+        q.cdEnd, q.cdGlobal = nil, nil
+        q.cd:ResetCooldown()
+        q.cd:SetHidden(true)
+        q.num:SetText("")
+    end
+    self:TickQuickslot()
+end
+
+function S:TickQuickslot()
+    local m = self.middle
+    if not (m and m.on) then return false end
+    local q = m.q
+    local left = q.cdEnd and (q.cdEnd - GetFrameTimeMilliseconds()) or 0
+    if left > 0 then
+        q.num:SetText(q.cdGlobal and "" or Secs(left / 1000))
+        return true
+    end
+    q.num:SetText("")
+    q.cdEnd = nil
+    return false
 end
 
 -- moving skills: only on the bar you're on, out of combat (as ESO's own bar)
@@ -646,6 +790,13 @@ function S:RegisterEvents()
         end
     end
 
+    -- the quickslot: chosen item, counts, cooldowns
+    local qn = 0
+    for _, ev in pairs({ EVENT_ACTIVE_QUICKSLOT_CHANGED, EVENT_ACTION_UPDATE_COOLDOWNS, EVENT_INVENTORY_SINGLE_SLOT_UPDATE,
+                         EVENT_ACTION_SLOT_UPDATED, EVENT_PLAYER_ACTIVATED }) do
+        if ev then qn = qn + 1; EM:RegisterForEvent(NS .. "QS" .. qn, ev, function() self:UpdateQuickslot() end) end
+    end
+
     -- power changes: repaint the cost frames
     EM:RegisterForEvent(NS .. "Power", EVENT_POWER_UPDATE, Full)
     EM:AddFilterForEvent(NS .. "Power", EVENT_POWER_UPDATE, REGISTER_FILTER_UNIT_TAG, "player")
@@ -685,9 +836,21 @@ function S:RegisterEvents()
 
     -- ... and corrected by the game's own effect times when your effect of the same skill is
     -- applied or refreshed (on you or on a target); a buff on you that ends early clears it
-    EM:RegisterForEvent(NS .. "Effect", EVENT_EFFECT_CHANGED, function(_, change, _, _, unitTag, _, endTime,
+    EM:RegisterForEvent(NS .. "Effect", EVENT_EFFECT_CHANGED, function(_, change, _, effectName, unitTag, _, endTime,
                                                                   _, _, _, _, _, _, _, _, abilityId)
-        if not self:IsSlotted(abilityId) or Delayed(abilityId) or self.companions[abilityId] then return end
+        if self.debugTimers then
+            SKT:Print(string.format("%s %s on %s, id %s, ends in %.1f s", change == EFFECT_RESULT_FADED and "faded:" or "effect:",
+                zo_strformat("<<1>>", effectName or ""), tostring(unitTag), tostring(abilityId),
+                (endTime or 0) - GetFrameTimeSeconds()))
+        end
+        if not self:IsSlotted(abilityId) then
+            abilityId = self:SlottedByName(effectName)    -- the skill's effect under its own id
+            if not abilityId then return end
+        end
+        if Delayed(abilityId) or self.companions[abilityId] then return end
+        -- the netches: the timer is the whole duration from the cast; their pulses (including the
+        -- last one, which runs past the end) are left out
+        if Whole(abilityId) then return end
         if change == EFFECT_RESULT_FADED then
             if unitTag == "player" then self.timers[abilityId] = nil; self:Tick() end
         elseif endTime and endTime > GetFrameTimeSeconds() then
@@ -700,6 +863,12 @@ function S:RegisterEvents()
     end)
     EM:AddFilterForEvent(NS .. "Effect", EVENT_EFFECT_CHANGED,
         REGISTER_FILTER_SOURCE_COMBAT_UNIT_TYPE, COMBAT_UNIT_TYPE_PLAYER)
+    -- /sktskills: your skills' effects as they happen, to see what a skill's timer could use
+    SLASH_COMMANDS["/sktskills"] = function()
+        self.debugTimers = not self.debugTimers
+        SKT:Print(self.debugTimers and "Skill test on: your effects show in chat. /sktskills again to stop."
+            or "Skill test off.")
+    end
     EM:RegisterForEvent(NS .. "Scale", EVENT_ALL_GUI_SCREENS_RESIZED, function()
         self:Layout(); self:Refresh()
     end)
@@ -726,7 +895,7 @@ SKT:RegisterModule({
         hideDefault = true,  -- ESO's own action bar hidden
         gcdNumbers  = false, -- countdown numbers on the global cooldown too
         ultPercent  = true,  -- the ultimates: percent of their cost
-        ultMeter    = true,  -- the ultimate meter between the bars
+        ultMeter    = true,  -- the middle column: quickslot over the ultimate
         showTimers  = true,  -- time left on each skill's effect
         gcdAlpha    = 62,    -- sweep darkness (%) on the global cooldown
         cdAlpha     = 62,    -- sweep darkness (%) on real cooldowns
@@ -778,7 +947,7 @@ SKT:RegisterModule({
         L:Header("Ultimate")
         L:Check("Percent of its cost", function() return db.ultPercent end,
             function(v) db.ultPercent = v; S:Refresh() end)
-        L:Check("Meter between the bars", function() return db.ultMeter end,
+        L:Check("Quickslot and ultimate column", function() return db.ultMeter end,
             function(v) db.ultMeter = v; relayout() end)
 
         R:Header("Size")

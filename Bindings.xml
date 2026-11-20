@@ -5,6 +5,12 @@
                 <Down>if SKT and SKT.Icons then SKT.Icons:KeyDown() end</Down>
                 <Up>if SKT and SKT.Icons then SKT.Icons:KeyUp() end</Up>
             </Action>
+            <Action name="SKTOOLS_RESET_DUMMY">
+                <Down>if SKT and SKT.ResetDummy then SKT:ResetDummy() end</Down>
+            </Action>
+            <Action name="SKTOOLS_RESET_DUMMIES">
+                <Down>if SKT and SKT.ResetDummies then SKT:ResetDummies() end</Down>
+            </Action>
         </Category>
     </Layer>
 </Bindings>

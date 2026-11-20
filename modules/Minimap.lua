@@ -123,16 +123,35 @@ function M:Build()
     end
     self.ringAll = D.NewRing(root, 9)
 
-    -- the bee: opens the settings window; faces right, and left while the window is open
-    local bee = WM:CreateControl(NS .. "Bee", root, CT_TEXTURE)
+    -- the bee: on the frame's west point, as on the minimap in WoW Forever; a left click opens or
+    -- closes the settings window, a right click opens it. Faces right, and left while it's open.
+    -- a round button, as WoW Forever's minimap buttons but silver: a dark navy disc, the bee,
+    -- and a polished silver ring round it (Media/BeeRing.dds)
+    local btn = WM:CreateControl(NS .. "BeeButton", root, CT_CONTROL)
+    btn:SetDrawTier(DT_HIGH)
+    btn:SetMouseEnabled(true)
+    btn.disc = WM:CreateControl(nil, btn, CT_TEXTURE)
+    btn.disc:SetTexture(CIRCLE)
+    btn.disc:SetAnchor(CENTER, btn, CENTER, 0, 0)
+    btn.disc:SetDrawTier(DT_HIGH); btn.disc:SetDrawLevel(12)
+    local nav = SKT.colors.bg
+    btn.disc:SetColor(nav[1], nav[2], nav[3], 1)
+    local bee = WM:CreateControl(NS .. "Bee", btn, CT_TEXTURE)
     bee:SetTexture(BEE)
-    bee:SetDrawTier(DT_HIGH)
-    bee:SetMouseEnabled(true)
-    bee:SetHandler("OnMouseUp", function(_, button, upInside)
-        if upInside and button == MOUSE_BUTTON_INDEX_LEFT then SKT:ToggleWindow() end
+    bee:SetAnchor(CENTER, btn, CENTER, 0, 0)
+    bee:SetDrawTier(DT_HIGH); bee:SetDrawLevel(13)
+    btn.ring = WM:CreateControl(nil, btn, CT_TEXTURE)
+    btn.ring:SetTexture("SKTools-ESO/Media/BeeRing.dds")
+    btn.ring:SetAnchorFill(btn)
+    btn.ring:SetDrawTier(DT_HIGH); btn.ring:SetDrawLevel(14)
+    btn:SetHandler("OnMouseUp", function(_, button, upInside)
+        if not upInside then return end
+        if button == MOUSE_BUTTON_INDEX_LEFT then SKT:ToggleWindow()
+        elseif button == MOUSE_BUTTON_INDEX_RIGHT then SKT:ShowWindow() end
     end)
-    bee:SetHandler("OnMouseEnter", function(c) c:SetColor(1, 1, 0.82, 1) end)
-    bee:SetHandler("OnMouseExit", function(c) c:SetColor(1, 1, 1, 1) end)
+    btn:SetHandler("OnMouseEnter", function() bee:SetColor(1, 1, 0.82, 1) end)
+    btn:SetHandler("OnMouseExit", function() bee:SetColor(1, 1, 1, 1) end)
+    self.beeButton = btn
     self.bee = bee
     self:FaceBee()
 
@@ -204,19 +223,14 @@ function M:Layout()
     self.info:SetHidden(not db.showZone)
     self.infoLine:SetHidden(true)
 
-    -- the bee on the left of the strip
+    -- the bee: placed with the circle, below (the strip's text has the whole strip)
     local beeSize = D.OnPx(math.max(12, beeH - 2 * px))
-    self.bee:ClearAnchors()
-    self.bee:SetAnchor(LEFT, self.root, TOPLEFT, D.OnPx(3), stripH / 2)
-    self.bee:SetDimensions(beeSize, beeSize)
-    self.bee:SetHidden(not db.showZone)
-    local textLeft = D.OnPx(3) + beeSize + D.OnPx(2)
+    local textLeft = D.OnPx(4)
 
     local zoneLabel = self.lines[1]
     zoneLabel:SetFont("$(MEDIUM_FONT)|" .. fontSize .. "|soft-shadow-thin")
     zoneLabel:ClearAnchors()
-    -- centred on the whole strip; kept as wide on the right as the bee takes on the left, so a
-    -- long name never runs under the bee
+    -- centred on the whole strip
     zoneLabel:SetAnchor(CENTER, self.root, TOPLEFT, w / 2, stripH / 2)
     zoneLabel:SetWidth(math.max(20, w - 2 * textLeft))
     zoneLabel:SetMaxLineCount(zoneLines)
@@ -235,6 +249,18 @@ function M:Layout()
     self.view:SetAnchor(TOPLEFT, self.root, TOPLEFT, 0, top)
     self.view:SetDimensions(w, w)
     self.mapView = w
+
+    -- the bee, centred on the west point of the frame (the middle of its band), or of the map's
+    -- edge without the frame
+    local out = (db.frame ~= false) and (w * (FRAME_SCALE - 1) / 4) or 0
+    local bs = D.OnPx(beeSize * 1.45)
+    local btn = self.beeButton
+    btn:ClearAnchors()
+    btn:SetAnchor(CENTER, self.view, LEFT, D.OnPx(-out), 0)
+    btn:SetDimensions(bs, bs)
+    btn.disc:SetDimensions(D.OnPx(bs * 0.84), D.OnPx(bs * 0.84))
+    self.bee:SetDimensions(D.OnPx(bs * 0.66), D.OnPx(bs * 0.66))
+    btn:SetHidden(false)
 
     -- the arrow: a little bigger with a bigger map
     local pipSize = D.OnPx(math.max(13, w * 0.096))

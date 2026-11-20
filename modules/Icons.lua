@@ -9,7 +9,8 @@
 
   Shown only in combat (the default), always, or while the "Show head icons" key is held (set
   in Controls > Keybindings > SKTools). While the Icons tab is open, every set icon shows.
-  Never over your own head.
+  Never over your own head, except while the tab is open: the friend chosen in its list, when
+  they're not in your group, shows their icon over yours, to see it and tune it.
 
   Icons are DDS files (DXT5, with alpha; square, 64 or 128 px). The ones made for SKTools are
   in Media/Icons. Others can be added by name: a file put in that folder (Media/Icons/Name.dds,
@@ -33,7 +34,7 @@ ZO_CreateStringId("SI_BINDING_NAME_SKTOOLS_HEAD_ICONS", "Show head icons (hold)"
 
 local MEDIA = "SKTools-ESO/Media/Icons/"
 -- the icons made for SKTools: key -> name shown
-local BUILT_IN = { "Tank", "Healer", "Star", "Diamond", "Circle", "Triangle", "Square", "Heart", "Moon", "Crown", "Arrow", "Raspberry" }
+local BUILT_IN = { "Tank", "Healer", "Star", "Diamond", "Circle", "Triangle", "Square", "Heart", "Moon", "Crown", "Arrow", "Raspberry", "Dumbbell", "Butterfly", "BlueMan", "RedPanda", "Raccoon" }
 
 -- an icon's key -> texture path ("Tank" -> SKTools' own, "/esoui/..." as given)
 local function Path(key)
@@ -162,7 +163,18 @@ function Ic:Targets(preview)
             out[#out + 1] = { tag = "reticleover", key = self.db.friends[acct] }
         end
     end
-    -- never over your own head
+    -- never over your own head, except: with the Icons tab open, the friend chosen in the list,
+    -- when they're not in your group, shows their icon over yours (to see it and tune it)
+    local f = preview and self.previewFriend
+    if f then
+        local key = self.db.friends[zo_strlower(f)] or self.selected   -- theirs, else the one chosen
+        local inGroup = false
+        for i = 1, (n or 0) do
+            local tag = GetGroupUnitTagByIndex(i)
+            if tag and Account(tag) == zo_strlower(f) then inGroup = true; break end
+        end
+        if key and not inGroup then out[#out + 1] = { tag = "player", key = key } end
+    end
     return out
 end
 
@@ -338,7 +350,7 @@ SKT:RegisterModule({
             for i = #list + 1, #cells do cells[i]:SetHidden(true) end
             Mark()
         end
-        R:Space(3 * 38 + 2)
+        R:Space(4 * 38 + 2)
         status:SetFont("ZoFontGameSmall")
         status:SetColor(SKT.col(SKT.colors.muted))
         status:SetAnchor(TOPLEFT, page, TOPLEFT, R.x, R.y)
@@ -350,42 +362,48 @@ SKT:RegisterModule({
             { "Healer icon", 128, function() db.healer = Ic.selected or "Healer" end },
         })
 
-        -- friends: pick one (‹ ›), then give them the chosen icon
-        local friends, fi = Ic:Friends(), 1
-        local nameLbl
-        local function ShowFriend()
-            local name = friends[fi]
-            if not name then nameLbl:SetText("No friends") return end
+        -- friends: pick one from the drop-down, then give them the chosen icon
+        local friends = Ic:Friends()
+        local fname = friends[1]
+        local ddCtrl = WM:CreateControlFromVirtual(page:GetName() .. "IcFriends", page,
+            ZO_ScrollableComboBox and "ZO_ScrollableComboBox" or "ZO_ComboBox")
+        ddCtrl:SetAnchor(TOPLEFT, page, TOPLEFT, R.x, R.y)
+        ddCtrl:SetDimensions(268, 28)
+        local dd = ZO_ComboBox_ObjectFromContainer(ddCtrl)
+        if dd.SetSortsItems then dd:SetSortsItems(false) end
+        local function Label(name)
             local icon = db.friends[zo_strlower(name)]
-            nameLbl:SetText(name .. (icon and ("  (" .. icon .. ")") or ""))
+            return icon and (name .. "  (" .. icon .. ")") or name
         end
-        local y = R.y
-        UI.Button(page, "IcPrev", R.x, y, "<", 34, function()
-            if #friends > 0 then fi = (fi - 2) % #friends + 1; ShowFriend() end
-        end)
-        UI.Button(page, "IcNext", R.x + 234, y, ">", 34, function()
-            if #friends > 0 then fi = fi % #friends + 1; ShowFriend() end
-        end)
-        nameLbl = WM:CreateControl(page:GetName() .. "IcFriend", page, CT_LABEL)
-        nameLbl:SetFont("ZoFontGame")
-        nameLbl:SetColor(SKT.col(SKT.colors.text))
-        nameLbl:SetAnchor(TOP, page, TOPLEFT, R.x + 134, y + 4)
-        nameLbl:SetDimensions(190, 24)
-        nameLbl:SetHorizontalAlignment(TEXT_ALIGN_CENTER)
-        nameLbl:SetMaxLineCount(1)
-        nameLbl:SetWrapMode(TEXT_WRAP_MODE_ELLIPSIS)
-        R:Space(34)
+        local function Fill()
+            dd:ClearItems()
+            if #friends == 0 then
+                dd:AddItem(dd:CreateItemEntry("No friends", function() end), ZO_COMBOBOX_SUPPRESS_UPDATE)
+            end
+            for _, name in ipairs(friends) do
+                dd:AddItem(dd:CreateItemEntry(Label(name), function()
+                    fname = name
+                    Ic.previewFriend = name
+                end), ZO_COMBOBOX_SUPPRESS_UPDATE)
+            end
+            dd:UpdateItems()
+            if fname then
+                dd:SetSelectedItemText(Label(fname))
+            else
+                dd:SetSelectedItemText("No friends")
+            end
+        end
+        Ic.previewFriend = fname
+        R:Space(36)
         R:Buttons({
             { "Give icon", 128, function()
-                local name = friends[fi]
-                if name then db.friends[zo_strlower(name)] = Ic.selected; ShowFriend() end
+                if fname then db.friends[zo_strlower(fname)] = Ic.selected; Fill() end
             end },
             { "Remove", 128, function()
-                local name = friends[fi]
-                if name then db.friends[zo_strlower(name)] = nil; ShowFriend() end
+                if fname then db.friends[zo_strlower(fname)] = nil; Fill() end
             end },
         })
-        ShowFriend()
+        Fill()
 
         -- add an icon: a file in Media/Icons (its name) or a game texture path
         R:Header("Add an icon")
@@ -400,7 +418,7 @@ SKT:RegisterModule({
             if v == "" then return end
             if v:find("/") then v = v .. ".dds" end
             for _, k in ipairs(Ic:AllIcons()) do if k == v then return end end
-            if #Ic:AllIcons() >= 21 then SKT:Print("The icon list is full.") return end
+            if #Ic:AllIcons() >= 28 then SKT:Print("The icon list is full.") return end
             db.custom[#db.custom + 1] = v
             eb:SetText("")
             Ic.selected = v

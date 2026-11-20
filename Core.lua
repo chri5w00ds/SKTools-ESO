@@ -5,7 +5,7 @@ SKT = SKT or {}
 local SKT = SKT
 
 SKT.name    = "SKTools-ESO"
-SKT.version = "0.40.5"
+SKT.version = "0.42.4"
 SKT.author  = "Scotskoogen-Chris"
 SKT.svName  = "SKToolsESO_SV"
 SKT.svVer   = 1

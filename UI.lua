@@ -406,7 +406,9 @@ function SKT:CreateTab(tabCol, mod, index)
     marker:SetAnchor(LEFT, tab, LEFT, 8, -1)
     marker:SetHidden(true)
 
-    local lbl = MakeLabel("$(parent)Label", tab, mod.title, "$(MEDIUM_FONT)|16|soft-shadow-thin", self.colors.text)
+    -- every word capitalised ("Head Icons")
+    local title = (mod.title or ""):gsub("(%a)([%w']*)", function(a, b) return a:upper() .. b end)
+    local lbl = MakeLabel("$(parent)Label", tab, title, "$(MEDIUM_FONT)|16|soft-shadow-thin", self.colors.text)
     lbl:SetAnchor(LEFT, tab, LEFT, 22, 0)
 
     tab:SetHandler("OnClicked", function() self:SelectTab(mod.key) end)
